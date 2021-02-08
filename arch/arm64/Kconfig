@@ -321,6 +321,8 @@ config ARCH_MT6755
 	select MTK_IRQ_NEW_DESIGN
 	select MTK_IRQ_NEW_DESIGN_DEBUG
 	select MTK_EIC_HISTORY_DUMP
+	select HAVE_ARCH_MMAP_RND_BITS
+	select HAVE_ARCH_MMAP_RND_COMPAT_BITS
 	help
 	  This enable support for MediaTek MT6755
 
