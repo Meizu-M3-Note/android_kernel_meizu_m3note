@@ -19,6 +19,9 @@
 #include <linux/math64.h>
 #include <linux/writeback.h>
 #include <linux/compaction.h>
+#include <linux/mm_inline.h>
+
+#include "internal.h"
 
 #ifdef CONFIG_VM_EVENT_COUNTERS
 DEFINE_PER_CPU(struct vm_event_state, vm_event_states) = {{0}};
@@ -626,9 +629,14 @@ static char * const migratetype_names[MIGRATE_TYPES] = {
 	"Unmovable",
 	"Reclaimable",
 	"Movable",
+#ifdef CONFIG_MTKPASR
+	"Mtkpasr",
+#endif
 	"Reserve",
+#if !defined(CONFIG_CMA) || !defined(CONFIG_MTK_SVP) /* SVP 16 */
 #ifdef CONFIG_CMA
 	"CMA",
+#endif
 #endif
 #ifdef CONFIG_MEMORY_ISOLATION
 	"Isolate",
@@ -697,8 +705,21 @@ static void walk_zones_in_node(struct seq_file *m, pg_data_t *pgdat,
 #define TEXT_FOR_HIGHMEM(xx)
 #endif
 
+#if !defined(CONFIG_CMA) || !defined(CONFIG_MTK_SVP) /* SVP 12 */
 #define TEXTS_FOR_ZONES(xx) TEXT_FOR_DMA(xx) TEXT_FOR_DMA32(xx) xx "_normal", \
 					TEXT_FOR_HIGHMEM(xx) xx "_movable",
+#else
+#ifdef CONFIG_CMA
+#define TEXT_FOR_CMA(xx) xx "_cma",
+#else
+#define TEXT_FOR_CMA(xx)
+#endif
+
+/* SVP 12 */
+#define TEXTS_FOR_ZONES(xx) TEXT_FOR_DMA(xx) TEXT_FOR_DMA32(xx) xx "_normal", \
+					TEXT_FOR_HIGHMEM(xx) xx "_movable", \
+					TEXT_FOR_CMA(xx)
+#endif
 
 const char * const vmstat_text[] = {
 	/* Zoned VM counters */
@@ -738,7 +759,9 @@ const char * const vmstat_text[] = {
 	"numa_other",
 #endif
 	"nr_anon_transparent_hugepages",
+#if !defined(CONFIG_CMA) || !defined(CONFIG_MTK_SVP) /* SVP 16 */
 	"nr_free_cma",
+#endif
 	"nr_dirty_threshold",
 	"nr_dirty_background_threshold",
 
@@ -756,6 +779,7 @@ const char * const vmstat_text[] = {
 
 	"pgfault",
 	"pgmajfault",
+	"pgfmfault",
 
 	TEXTS_FOR_ZONES("pgrefill")
 	TEXTS_FOR_ZONES("pgsteal_kswapd")
@@ -904,6 +928,10 @@ static void pagetypeinfo_showblockcount_print(struct seq_file *m,
 			continue;
 
 		page = pfn_to_page(pfn);
+#if defined(CONFIG_CMA) && defined(CONFIG_MTK_SVP) /* SVP 05 */
+		if (page_zone(page) != zone)
+			continue;
+#endif
 
 		/* Watch for unexpected holes punched in the memmap */
 		if (!memmap_valid_within(pfn, page, zone))
@@ -1053,7 +1081,7 @@ static void zoneinfo_show_print(struct seq_file *m, pg_data_t *pgdat,
 		   "\n  all_unreclaimable: %u"
 		   "\n  start_pfn:         %lu"
 		   "\n  inactive_ratio:    %u",
-		   zone->all_unreclaimable,
+		   !zone_reclaimable(zone),
 		   zone->zone_start_pfn,
 		   zone->inactive_ratio);
 	seq_putc(m, '\n');

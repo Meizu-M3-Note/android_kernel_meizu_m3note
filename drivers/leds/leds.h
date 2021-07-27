@@ -20,12 +20,42 @@
 static inline void __led_set_brightness(struct led_classdev *led_cdev,
 					enum led_brightness value)
 {
-	if (value > led_cdev->max_brightness)
-		value = led_cdev->max_brightness;
-	led_cdev->brightness = value;
-	if (!(led_cdev->flags & LED_SUSPENDED))
-		led_cdev->brightness_set(led_cdev, value);
+
+	/*
+	 * Native linux kernel code
+	 */
+		if (value > led_cdev->max_brightness)
+			value = led_cdev->max_brightness;
+	
+		led_cdev->brightness = value;
+		if (!(led_cdev->flags & LED_SUSPENDED))
+			led_cdev->brightness_set(led_cdev, value);
+	
 }
+
+/**********************************************************************/
+#if(1)		//add zal1518 for mz need by 20160222 
+static inline void __led_set_mz_blink(struct led_classdev *led_cdev,
+					int value)
+{
+	unsigned long state;	
+		led_cdev->blink_mz = value;
+		if (!(led_cdev->flags & LED_SUSPENDED)){			
+			if(value){
+				state = 984 ;	//for near 2s per peroid
+			}
+			else{
+				state = 0 ;
+			}
+				led_blink_set(led_cdev, &state, &state);
+				led_cdev->blink_delay_on = state;
+				led_cdev->blink_delay_off = state;
+			}
+	
+}
+#endif 
+/*****************************************************************/
+
 
 static inline int led_get_brightness(struct led_classdev *led_cdev)
 {

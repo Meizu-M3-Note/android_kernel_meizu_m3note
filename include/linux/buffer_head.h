@@ -139,6 +139,9 @@ BUFFER_FNS(Prio, prio)
 	})
 #define page_has_buffers(page)	PagePrivate(page)
 
+void buffer_check_dirty_writeback(struct page *page,
+				     bool *dirty, bool *writeback);
+
 /*
  * Declarations
  */
@@ -170,12 +173,22 @@ void __wait_on_buffer(struct buffer_head *);
 wait_queue_head_t *bh_waitq_head(struct buffer_head *bh);
 struct buffer_head *__find_get_block(struct block_device *bdev, sector_t block,
 			unsigned size);
+#if defined(CONFIG_CMA) && defined(CONFIG_MTK_SVP)
+struct buffer_head *__getblk_gfp(struct block_device *bdev, sector_t block,
+				  unsigned size, gfp_t gfp);
+#else
 struct buffer_head *__getblk(struct block_device *bdev, sector_t block,
 			unsigned size);
+#endif
 void __brelse(struct buffer_head *);
 void __bforget(struct buffer_head *);
 void __breadahead(struct block_device *, sector_t block, unsigned int size);
+#if defined(CONFIG_CMA) && defined(CONFIG_MTK_SVP)
+struct buffer_head *__bread_gfp(struct block_device *,
+				sector_t block, unsigned size, gfp_t gfp);
+#else
 struct buffer_head *__bread(struct block_device *, sector_t block, unsigned size);
+#endif
 void invalidate_bh_lrus(void);
 struct buffer_head *alloc_buffer_head(gfp_t gfp_flags);
 void free_buffer_head(struct buffer_head * bh);
@@ -288,11 +301,26 @@ static inline void bforget(struct buffer_head *bh)
 		__bforget(bh);
 }
 
+#if !defined(CONFIG_CMA) || !defined(CONFIG_MTK_SVP)
 static inline struct buffer_head *
 sb_bread(struct super_block *sb, sector_t block)
 {
 	return __bread(sb->s_bdev, block, sb->s_blocksize);
 }
+#else
+static inline struct buffer_head *
+sb_bread(struct super_block *sb, sector_t block)
+{
+	/* return __bread_gfp(sb->s_bdev, block, sb->s_blocksize, __GFP_MOVABLE); */
+	return __bread_gfp(sb->s_bdev, block, sb->s_blocksize, __GFP_MOVABLE | __GFP_NOZONECMA);
+}
+
+static inline struct buffer_head *
+sb_bread_unmovable(struct super_block *sb, sector_t block)
+{
+	return __bread_gfp(sb->s_bdev, block, sb->s_blocksize, 0);
+}
+#endif
 
 static inline void
 sb_breadahead(struct super_block *sb, sector_t block)
@@ -303,7 +331,12 @@ sb_breadahead(struct super_block *sb, sector_t block)
 static inline struct buffer_head *
 sb_getblk(struct super_block *sb, sector_t block)
 {
+#if !defined(CONFIG_CMA) || !defined(CONFIG_MTK_SVP)
 	return __getblk(sb->s_bdev, block, sb->s_blocksize);
+#else
+	/*return __getblk_gfp(sb->s_bdev, block, sb->s_blocksize, __GFP_MOVABLE); */
+	return __getblk_gfp(sb->s_bdev, block, sb->s_blocksize, __GFP_MOVABLE | __GFP_NOZONECMA);
+#endif
 }
 
 static inline struct buffer_head *
@@ -339,6 +372,40 @@ static inline void lock_buffer(struct buffer_head *bh)
 	if (!trylock_buffer(bh))
 		__lock_buffer(bh);
 }
+
+#if defined(CONFIG_CMA) && defined(CONFIG_MTK_SVP)
+static inline struct buffer_head *getblk_unmovable(struct block_device *bdev,
+						   sector_t block,
+						   unsigned size)
+{
+	return __getblk_gfp(bdev, block, size, 0);
+}
+
+static inline struct buffer_head *__getblk(struct block_device *bdev,
+					   sector_t block,
+					   unsigned size)
+{
+	/* return __getblk_gfp(bdev, block, size, __GFP_MOVABLE); */
+	return __getblk_gfp(bdev, block, size, __GFP_MOVABLE | __GFP_NOZONECMA);
+}
+
+/**
+ *  __bread() - reads a specified block and returns the bh
+ *  @bdev: the block_device to read from
+ *  @block: number of block
+ *  @size: size (in bytes) to read
+ *
+ *  Reads a specified block, and returns buffer head that contains it.
+ *  The page cache is allocated from movable area so that it can be migrated.
+ *  It returns NULL if the block was unreadable.
+ */
+static inline struct buffer_head *
+__bread(struct block_device *bdev, sector_t block, unsigned size)
+{
+	/* return __bread_gfp(bdev, block, size, __GFP_MOVABLE); */
+	return __bread_gfp(bdev, block, size, __GFP_MOVABLE | __GFP_NOZONECMA);
+}
+#endif
 
 extern int __set_page_dirty_buffers(struct page *page);
 

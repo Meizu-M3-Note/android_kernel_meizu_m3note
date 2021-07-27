@@ -725,7 +725,7 @@ static int mbind_range(struct mm_struct *mm, unsigned long start,
 			((vmstart - vma->vm_start) >> PAGE_SHIFT);
 		prev = vma_merge(mm, prev, vmstart, vmend, vma->vm_flags,
 				  vma->anon_vma, vma->vm_file, pgoff,
-				  new_pol);
+				  new_pol, vma_get_anon_name(vma));
 		if (prev) {
 			vma = prev;
 			next = vma->vm_next;
@@ -1631,7 +1631,12 @@ static int apply_policy_zone(struct mempolicy *policy, enum zone_type zone)
 {
 	enum zone_type dynamic_policy_zone = policy_zone;
 
+#if !defined(CONFIG_CMA) || !defined(CONFIG_MTK_SVP) /* SVP 12 */
 	BUG_ON(dynamic_policy_zone == ZONE_MOVABLE);
+#else
+	BUG_ON(dynamic_policy_zone == ZONE_MOVABLE ||
+		is_zone_cma_idx(dynamic_policy_zone));
+#endif
 
 	/*
 	 * if policy->v.nodes has movable memory only,

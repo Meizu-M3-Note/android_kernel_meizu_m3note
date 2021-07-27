@@ -55,6 +55,7 @@ struct rtc_class_ops {
 	int (*open)(struct device *);
 	void (*release)(struct device *);
 	int (*ioctl)(struct device *, unsigned int, unsigned long);
+	long (*compat_ioctl) (struct file *, unsigned int, unsigned long);
 	int (*read_time)(struct device *, struct rtc_time *);
 	int (*set_time)(struct device *, struct rtc_time *);
 	int (*read_alarm)(struct device *, struct rtc_wkalrm *);
@@ -150,6 +151,13 @@ extern int rtc_read_alarm(struct rtc_device *rtc,
 			struct rtc_wkalrm *alrm);
 extern int rtc_set_alarm(struct rtc_device *rtc,
 				struct rtc_wkalrm *alrm);
+
+extern int rtc_set_alarm_poweron(struct rtc_device *rtc,
+				struct rtc_wkalrm *alrm);
+//extern void Set_IPO_flag(void);
+//extern void Clr_IPO_flag(void);
+
+				
 extern int rtc_initialize_alarm(struct rtc_device *rtc,
 				struct rtc_wkalrm *alrm);
 extern void rtc_update_irq(struct rtc_device *rtc,

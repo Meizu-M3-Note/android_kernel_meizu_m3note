@@ -61,15 +61,19 @@ struct tick_sched {
 	unsigned long			idle_sleeps;
 	int				idle_active;
 	ktime_t				idle_entrytime;
+	ktime_t				idle_entrytime_wo_cpuoffline;
 	ktime_t				idle_waketime;
 	ktime_t				idle_exittime;
 	ktime_t				idle_sleeptime;
 	ktime_t				iowait_sleeptime;
+	ktime_t				idle_sleeptime_wo_cpuoffline;
+	ktime_t				iowait_sleeptime_wo_cpuoffline;
 	ktime_t				sleep_length;
 	unsigned long			last_jiffies;
 	unsigned long			next_jiffies;
 	ktime_t				idle_expires;
 	int				do_timer_last;
+	int             cpu_plug_off_flag;
 };
 
 extern void __init tick_init(void);
@@ -85,7 +89,9 @@ extern void tick_setup_sched_timer(void);
 # if defined CONFIG_NO_HZ_COMMON || defined CONFIG_HIGH_RES_TIMERS
 extern void tick_cancel_sched_timer(int cpu);
 # else
-static inline void tick_cancel_sched_timer(int cpu) { }
+static inline void tick_cancel_sched_timer(int cpu)
+{
+}
 # endif
 
 # ifdef CONFIG_GENERIC_CLOCKEVENTS_BROADCAST
@@ -108,19 +114,51 @@ extern int tick_oneshot_mode_active(void);
 #   define arch_needs_cpu(cpu) (0)
 #  endif
 # else
-static inline void tick_clock_notify(void) { }
-static inline int tick_check_oneshot_change(int allow_nohz) { return 0; }
-static inline void tick_check_idle(int cpu) { }
-static inline int tick_oneshot_mode_active(void) { return 0; }
+static inline void tick_clock_notify(void)
+{
+}
+
+static inline int tick_check_oneshot_change(int allow_nohz)
+{
+	return 0;
+}
+
+static inline void tick_check_idle(int cpu)
+{
+}
+
+static inline int tick_oneshot_mode_active(void)
+{
+	return 0;
+}
 # endif
 
 #else /* CONFIG_GENERIC_CLOCKEVENTS */
-static inline void tick_init(void) { }
-static inline void tick_cancel_sched_timer(int cpu) { }
-static inline void tick_clock_notify(void) { }
-static inline int tick_check_oneshot_change(int allow_nohz) { return 0; }
-static inline void tick_check_idle(int cpu) { }
-static inline int tick_oneshot_mode_active(void) { return 0; }
+static inline void tick_init(void)
+{
+}
+
+static inline void tick_cancel_sched_timer(int cpu)
+{
+}
+
+static inline void tick_clock_notify(void)
+{
+}
+
+static inline int tick_check_oneshot_change(int allow_nohz)
+{
+	return 0;
+}
+
+static inline void tick_check_idle(int cpu)
+{
+}
+
+static inline int tick_oneshot_mode_active(void)
+{
+	return 0;
+}
 #endif /* !CONFIG_GENERIC_CLOCKEVENTS */
 
 # ifdef CONFIG_NO_HZ_COMMON
@@ -138,14 +176,23 @@ extern ktime_t tick_nohz_get_sleep_length(void);
 extern u64 get_cpu_idle_time_us(int cpu, u64 *last_update_time);
 extern u64 get_cpu_iowait_time_us(int cpu, u64 *last_update_time);
 
+extern void tick_set_cpu_plugoff_flag(int flag);
+extern u64 get_cpu_idle_time_us_wo_cpuoffline(int cpu, u64 *last_update_time);
+extern u64 get_cpu_iowait_time_us_wo_cpuoffline(int cpu, u64 *last_update_time);
+
 # else /* !CONFIG_NO_HZ_COMMON */
 static inline int tick_nohz_tick_stopped(void)
 {
 	return 0;
 }
 
-static inline void tick_nohz_idle_enter(void) { }
-static inline void tick_nohz_idle_exit(void) { }
+static inline void tick_nohz_idle_enter(void)
+{
+}
+
+static inline void tick_nohz_idle_exit(void)
+{
+}
 
 static inline ktime_t tick_nohz_get_sleep_length(void)
 {
@@ -153,8 +200,16 @@ static inline ktime_t tick_nohz_get_sleep_length(void)
 
 	return len;
 }
-static inline u64 get_cpu_idle_time_us(int cpu, u64 *unused) { return -1; }
-static inline u64 get_cpu_iowait_time_us(int cpu, u64 *unused) { return -1; }
+
+static inline u64 get_cpu_idle_time_us(int cpu, u64 *unused)
+{
+	return -1;
+}
+
+static inline u64 get_cpu_iowait_time_us(int cpu, u64 *unused)
+{
+	return -1;
+}
 # endif /* !CONFIG_NO_HZ_COMMON */
 
 #ifdef CONFIG_NO_HZ_FULL
@@ -165,12 +220,30 @@ extern void tick_nohz_full_kick(void);
 extern void tick_nohz_full_kick_all(void);
 extern void tick_nohz_task_switch(struct task_struct *tsk);
 #else
-static inline void tick_nohz_init(void) { }
-static inline int tick_nohz_full_cpu(int cpu) { return 0; }
-static inline void tick_nohz_full_check(void) { }
-static inline void tick_nohz_full_kick(void) { }
-static inline void tick_nohz_full_kick_all(void) { }
-static inline void tick_nohz_task_switch(struct task_struct *tsk) { }
+static inline void tick_nohz_init(void)
+{
+}
+
+static inline int tick_nohz_full_cpu(int cpu)
+{
+	return 0;
+}
+
+static inline void tick_nohz_full_check(void)
+{
+}
+
+static inline void tick_nohz_full_kick(void)
+{
+}
+
+static inline void tick_nohz_full_kick_all(void)
+{
+}
+
+static inline void tick_nohz_task_switch(struct task_struct *tsk)
+{
+}
 #endif
 
 

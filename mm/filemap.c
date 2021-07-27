@@ -1634,6 +1634,10 @@ int filemap_fault(struct vm_area_struct *vma, struct vm_fault *vmf)
 	} else if (!page) {
 		/* No page in the page cache at all */
 		do_sync_mmap_readahead(vma, ra, file, offset);
+#ifdef CONFIG_ZRAM
+        current->fm_flt++;
+#endif
+		count_vm_event(PGFMFAULT);
 		count_vm_event(PGMAJFAULT);
 		mem_cgroup_count_vm_event(vma->vm_mm, PGMAJFAULT);
 		ret = VM_FAULT_MAJOR;
@@ -2276,6 +2280,11 @@ struct page *grab_cache_page_write_begin(struct address_space *mapping,
 		gfp_mask |= __GFP_WRITE;
 	if (flags & AOP_FLAG_NOFS)
 		gfp_notmask = __GFP_FS;
+
+#if defined(CONFIG_CMA) && defined(CONFIG_MTK_SVP)
+	gfp_mask |= __GFP_NOZONECMA;
+#endif
+
 repeat:
 	page = find_lock_page(mapping, index);
 	if (page)

@@ -129,8 +129,15 @@
 #include <linux/inetdevice.h>
 #include <linux/cpu_rmap.h>
 #include <linux/static_key.h>
-
+#include <net/udp.h>
 #include "net-sysfs.h"
+
+#ifdef UDP_SKT_WIFI
+#include <linux/ftrace_event.h>
+#endif
+
+#define CREATE_TRACE_POINTS
+#include <trace/events/netdev_rx.h>
 
 /* Instead of increasing this, you should create a hash table. */
 #define MAX_GRO_SKBS 8
@@ -167,6 +174,35 @@ DEFINE_RWLOCK(dev_base_lock);
 EXPORT_SYMBOL(dev_base_lock);
 
 seqcount_t devnet_rename_seq;
+
+#if NETDEV_TRACE
+#define NET_STATS_NUM  8
+#define NET_RPS_NUM    256
+#define NET_DL_MAGIC   333
+#define NET_UL_MAGIC   555
+
+DEFINE_PER_CPU(unsigned long long [NET_STATS_NUM], netrx_stats);
+DEFINE_PER_CPU(unsigned long long [NET_STATS_NUM], rx_rps_stats);
+DEFINE_PER_CPU(unsigned int, rx_rps_idx);
+DEFINE_PER_CPU(unsigned int, rx_rps_rcv_idx);
+DEFINE_PER_CPU(unsigned long long [NET_RPS_NUM], rx_rps_buf);
+
+DEFINE_PER_CPU(unsigned long long [NET_STATS_NUM], nettx_stats);
+DEFINE_PER_CPU(unsigned long long [NET_STATS_NUM], tx_rps_stats);
+DEFINE_PER_CPU(unsigned int, tx_rps_idx);
+DEFINE_PER_CPU(unsigned int, tx_rps_rcv_idx);
+DEFINE_PER_CPU(unsigned long long [NET_RPS_NUM], tx_rps_buf);
+
+static inline void netif_rx_stats_pre(struct sk_buff *skb);
+static inline void netif_rx_stats_post(struct sk_buff *skb);
+static inline void netdev_stats_pre(struct sk_buff *skb, int idx);
+static inline void netdev_stats_post(struct sk_buff *skb, int idx);
+static inline void netdev_enqueue_stats(struct sk_buff *skb, int cpu);
+static inline void netif_receive_stats_pre(struct sk_buff *skb, int idx);
+static inline void netif_receive_stats_post(struct sk_buff *skb);
+
+
+#endif
 
 static inline void dev_base_seq_inc(struct net *net)
 {
@@ -2524,6 +2560,10 @@ int dev_hard_start_xmit(struct sk_buff *skb, struct net_device *dev,
 
 	if (likely(!skb->next)) {
 		netdev_features_t features;
+#if NETDEV_TRACE
+		/* [6]: dev_queue_xmit -> dev_hard_start_xmit, also dev queue schedule time */
+		netdev_stats_pre(skb, 6);
+#endif
 
 		/*
 		 * If device doesn't need skb->dst, release it right now while
@@ -2586,6 +2626,10 @@ int dev_hard_start_xmit(struct sk_buff *skb, struct net_device *dev,
 		trace_net_dev_xmit(skb, rc, dev, skb_len);
 		if (rc == NETDEV_TX_OK)
 			txq_trans_update(txq);
+#if NETDEV_TRACE
+		/* [7]: dev_hard_start_xmit runtime, also ccmni/rndis->xmit() runtime*/
+		netdev_stats_post(skb, 7);
+#endif
 		return rc;
 	}
 
@@ -2612,6 +2656,10 @@ gso:
 		txq_trans_update(txq);
 		if (unlikely(netif_xmit_stopped(txq) && skb->next))
 			return NETDEV_TX_BUSY;
+		#if NETDEV_TRACE
+		/* [7]: dev_hard_start_xmit runtime, also ccmni/rndis->xmit() runtime*/
+		netdev_stats_post(skb, 7);
+		#endif
 	} while (skb->next);
 
 out_kfree_gso_skb:
@@ -2678,6 +2726,7 @@ static inline int __dev_xmit_skb(struct sk_buff *skb, struct Qdisc *q,
 
 	spin_lock(root_lock);
 	if (unlikely(test_bit(__QDISC_STATE_DEACTIVATED, &q->state))) {
+		pr_debug(KERN_WARNING "[mtk_net]__dev_xmit_skb drop skb_len = %d \n", skb->len);
 		kfree_skb(skb);
 		rc = NET_XMIT_DROP;
 	} else if ((q->flags & TCQ_F_CAN_BYPASS) && !qdisc_qlen(q) &&
@@ -2788,6 +2837,26 @@ int dev_queue_xmit(struct sk_buff *skb)
 	int rc = -ENOMEM;
 
 	skb_reset_mac_header(skb);
+#if NETDEV_TRACE
+	/* [5]: netif_receive_skb -> dev_queue_xmit, also IP protocol runtime */
+	netdev_stats_pre(skb, 5);
+#endif
+
+#ifdef UDP_SKT_WIFI
+	
+	if (unlikely((sysctl_met_is_enable == 1) && (sysctl_udp_met_port > 0)
+		 && (ip_hdr(skb)->protocol == IPPROTO_UDP) && skb->sk)) {
+		
+	    if (sysctl_udp_met_port == ntohs((inet_sk(skb->sk))->inet_sport)) {
+	    	struct udphdr * udp_iphdr = udp_hdr(skb);
+	    	if (udp_iphdr && (ntohs(udp_iphdr->len) >= 12)) {
+	            __u16 * seq_id = (__u16 *)((char *)udp_iphdr + 10);
+	            udp_event_trace_printk("F|%d|%s|%d\n", current->pid, *seq_id);
+	            
+	    	}
+	    }
+	}
+#endif
 
 	/* Disable soft irqs for various locks below. Also
 	 * stops preemption for RCU.
@@ -3115,6 +3184,11 @@ static int enqueue_to_backlog(struct sk_buff *skb, int cpu,
 	unsigned long flags;
 
 	sd = &per_cpu(softnet_data, cpu);
+#if NETDEV_TRACE
+	/* [3]: netif_rx_ni -> raise NET_RX softirq */
+	netdev_stats_pre(skb, 3);
+	netdev_enqueue_stats(skb, cpu);
+#endif
 
 	local_irq_save(flags);
 
@@ -3206,11 +3280,17 @@ int netif_rx_ni(struct sk_buff *skb)
 {
 	int err;
 
+#if NETDEV_TRACE
+	netif_rx_stats_pre(skb);
+#endif
 	preempt_disable();
 	err = netif_rx(skb);
 	if (local_softirq_pending())
 		do_softirq();
 	preempt_enable();
+#if NETDEV_TRACE
+	netif_rx_stats_post(skb);
+#endif
 
 	return err;
 }
@@ -3568,6 +3648,10 @@ static int __netif_receive_skb(struct sk_buff *skb)
 {
 	int ret;
 
+#if NETDEV_TRACE
+	/* [4]: raise NET_RX softirq -> netif_receive_skb */
+	netif_receive_stats_pre(skb, 4);
+#endif
 	if (sk_memalloc_socks() && skb_pfmemalloc(skb)) {
 		unsigned long pflags = current->flags;
 
@@ -3585,7 +3669,10 @@ static int __netif_receive_skb(struct sk_buff *skb)
 		tsk_restore_flags(current, pflags, PF_MEMALLOC);
 	} else
 		ret = __netif_receive_skb_core(skb, false);
-
+#if NETDEV_TRACE
+	/* rps_stats[2]: netif_receive_skb runtime*/
+	netif_receive_stats_post(skb);
+#endif
 	return ret;
 }
 
@@ -6361,3 +6448,152 @@ out:
 }
 
 subsys_initcall(net_dev_init);
+
+#if NETDEV_TRACE
+static inline void netif_rx_stats_pre(struct sk_buff *skb)
+{
+	int num = 0;
+	struct iphdr *iph = NULL;
+
+	if ((skb->mark&0xF0000000) == (0x1<<28)) {
+		for (; num < NET_STATS_NUM; num++)
+			__get_cpu_var(netrx_stats)[num] = 0;
+
+		if (skb->protocol == htons(ETH_P_IP)) {
+			iph = (struct iphdr *)skb->data;
+			__get_cpu_var(netrx_stats)[1] = iph->id;
+		} else
+			__get_cpu_var(netrx_stats)[1] = 0;
+
+		__get_cpu_var(netrx_stats)[0] = NET_DL_MAGIC;
+		__get_cpu_var(netrx_stats)[3] = sched_clock();
+		__get_cpu_var(netrx_stats)[2] = sched_clock();
+	} else
+		__get_cpu_var(netrx_stats)[0] = 0;
+
+	if ((skb->mark&0xF0000000) == (0x4<<28)) {
+		for (; num < NET_STATS_NUM; num++)
+			__get_cpu_var(nettx_stats)[num] = 0;
+
+		if (skb->protocol == htons(ETH_P_IP)) {
+			iph = (struct iphdr *)skb->data;
+			__get_cpu_var(nettx_stats)[1] = iph->id;
+		} else
+			__get_cpu_var(nettx_stats)[1] = 0;
+
+		__get_cpu_var(nettx_stats)[0] = NET_UL_MAGIC;
+		__get_cpu_var(nettx_stats)[3] = sched_clock();
+		__get_cpu_var(nettx_stats)[2] = sched_clock();
+	} else
+		__get_cpu_var(nettx_stats)[0] = 0;
+}
+
+static inline void netif_rx_stats_post(struct sk_buff *skb)
+{
+	if (__get_cpu_var(netrx_stats)[0]) {
+		__get_cpu_var(netrx_stats)[2] = sched_clock() - __get_cpu_var(netrx_stats)[2];
+		trace_netd_skb_rx(__get_cpu_var(netrx_stats));
+		__get_cpu_var(netrx_stats)[0] = 0;
+	}
+	if (__get_cpu_var(nettx_stats)[0]) {
+		__get_cpu_var(nettx_stats)[2] = sched_clock() - __get_cpu_var(nettx_stats)[2];
+		trace_netd_skb_rx(__get_cpu_var(nettx_stats));
+		__get_cpu_var(nettx_stats)[0] = 0;
+	}
+}
+
+static inline void netdev_stats_pre(struct sk_buff *skb, int idx)
+{
+	if (__get_cpu_var(netrx_stats)[0] && ((skb->mark&0xF0000000) == (0x1<<28))) {
+		__get_cpu_var(netrx_stats)[idx] = sched_clock() - __get_cpu_var(netrx_stats)[idx];
+		__get_cpu_var(netrx_stats)[idx+1] = sched_clock();
+	} else if (__get_cpu_var(nettx_stats)[0] && ((skb->mark&0xF0000000) == (0x4<<28))) {
+		__get_cpu_var(nettx_stats)[idx] = sched_clock() - __get_cpu_var(nettx_stats)[idx];
+		__get_cpu_var(nettx_stats)[idx+1] = sched_clock();
+	} else if (((skb->mark&0xF0000000) == (0x3<<28))) {
+		__get_cpu_var(rx_rps_stats)[idx] = sched_clock() - __get_cpu_var(rx_rps_stats)[idx];
+		__get_cpu_var(rx_rps_stats)[idx+1] = sched_clock();
+	} else if (((skb->mark&0xF0000000) == (0xC<<28))) {
+		__get_cpu_var(tx_rps_stats)[idx] = sched_clock() - __get_cpu_var(tx_rps_stats)[idx];
+		__get_cpu_var(tx_rps_stats)[idx+1] = sched_clock();
+	}
+}
+
+static inline void netdev_stats_post(struct sk_buff *skb, int idx)
+{
+	if (__get_cpu_var(netrx_stats)[0] && ((skb->mark&0xF0000000) == (0x1<<28)))
+		__get_cpu_var(netrx_stats)[idx] = sched_clock() - __get_cpu_var(netrx_stats)[idx];
+	else if (__get_cpu_var(nettx_stats)[0] && ((skb->mark&0xF0000000) == (0x4<<28)))
+		__get_cpu_var(nettx_stats)[idx] = sched_clock() - __get_cpu_var(nettx_stats)[idx];
+	else if ((skb->mark&0xF0000000) == (0x3<<28))
+		__get_cpu_var(rx_rps_stats)[idx] = sched_clock() - __get_cpu_var(rx_rps_stats)[idx];
+	else if ((skb->mark&0xF0000000) == (0xC<<28))
+		__get_cpu_var(tx_rps_stats)[idx] = sched_clock() - __get_cpu_var(tx_rps_stats)[idx];
+}
+
+static inline void netdev_enqueue_stats(struct sk_buff *skb, int cpu)
+{
+	int cur_cpu = smp_processor_id();
+	if (cur_cpu != cpu) {
+		if ((skb->mark&0xF0000000) == (0x1<<28)) {
+			skb->mark &= 0x0FFFFFFF;
+			skb->mark |= (0x3<<28);
+			__get_cpu_var(netrx_stats)[4] = cpu;
+			per_cpu(rx_rps_buf, cpu)[per_cpu(rx_rps_idx, cpu)++] = __get_cpu_var(netrx_stats)[1];
+			per_cpu(rx_rps_buf, cpu)[per_cpu(rx_rps_idx, cpu)++] = sched_clock();
+			if (per_cpu(rx_rps_idx, cpu) >= NET_RPS_NUM)
+				per_cpu(rx_rps_idx, cpu) = 0;
+		} else if ((skb->mark&0xF0000000) == (0x4<<28)) {
+			skb->mark &= 0x0FFFFFFF;
+			skb->mark |= (0xC<<28);
+			__get_cpu_var(nettx_stats)[4] = cpu;
+			per_cpu(tx_rps_buf, cpu)[per_cpu(tx_rps_idx, cpu)++] = __get_cpu_var(nettx_stats)[1];
+			per_cpu(tx_rps_buf, cpu)[per_cpu(tx_rps_idx, cpu)++] = sched_clock();
+			if (per_cpu(tx_rps_idx, cpu) >= NET_RPS_NUM)
+				per_cpu(tx_rps_idx, cpu) = 0;
+		}
+	}
+}
+
+static inline void netif_receive_stats_pre(struct sk_buff *skb, int idx)
+{
+	if (__get_cpu_var(netrx_stats)[0] && (skb->mark&0xF0000000) == (0x1<<28)) {
+		__get_cpu_var(netrx_stats)[idx] = sched_clock() - __get_cpu_var(netrx_stats)[idx];
+		__get_cpu_var(netrx_stats)[idx+1] = sched_clock();
+	} else if (__get_cpu_var(nettx_stats)[0] && (skb->mark&0xF0000000) == (0x4<<28)) {
+		__get_cpu_var(nettx_stats)[idx] = sched_clock() - __get_cpu_var(nettx_stats)[idx];
+		__get_cpu_var(nettx_stats)[idx+1] = sched_clock();
+	} else if ((skb->mark&0xF0000000) == (0x3<<28)) {
+		__get_cpu_var(rx_rps_stats)[1] = __get_cpu_var(rx_rps_buf)[__get_cpu_var(rx_rps_rcv_idx)++];
+		__get_cpu_var(rx_rps_stats)[4] = sched_clock() - __get_cpu_var(rx_rps_buf)[__get_cpu_var(rx_rps_rcv_idx)++];
+		if (__get_cpu_var(rx_rps_rcv_idx) >= NET_RPS_NUM)
+			__get_cpu_var(rx_rps_rcv_idx) = 0;
+		__get_cpu_var(rx_rps_stats)[0] = NET_DL_MAGIC;
+		__get_cpu_var(rx_rps_stats)[3] = sched_clock();
+		__get_cpu_var(rx_rps_stats)[5] = sched_clock();
+	} else if ((skb->mark&0xF0000000) == (0xC<<28)) {
+		__get_cpu_var(tx_rps_stats)[1] = __get_cpu_var(tx_rps_buf)[__get_cpu_var(tx_rps_rcv_idx)++];
+		__get_cpu_var(tx_rps_stats)[4] = sched_clock() - __get_cpu_var(tx_rps_buf)[__get_cpu_var(tx_rps_rcv_idx)++];
+		if (__get_cpu_var(tx_rps_rcv_idx) >= NET_RPS_NUM)
+			__get_cpu_var(tx_rps_rcv_idx) = 0;
+		__get_cpu_var(tx_rps_stats)[0] = NET_UL_MAGIC;
+		__get_cpu_var(tx_rps_stats)[3] = sched_clock();
+		__get_cpu_var(tx_rps_stats)[5] = sched_clock();
+	}
+}
+
+static inline void netif_receive_stats_post(struct sk_buff *skb)
+{
+	if ((skb->mark&0xF0000000) == (0x3<<28)) {
+		__get_cpu_var(rx_rps_stats)[3] = sched_clock() - __get_cpu_var(rx_rps_stats)[3];
+		__get_cpu_var(rx_rps_stats)[2] = __get_cpu_var(rx_rps_stats)[3] + __get_cpu_var(rx_rps_stats)[4];
+		trace_rpsd_skb_rx(__get_cpu_var(rx_rps_stats));
+		__get_cpu_var(rx_rps_stats)[0] = 0;
+	} else if ((skb->mark&0xF0000000) == (0xC<<28)) {
+		__get_cpu_var(tx_rps_stats)[3] = sched_clock() - __get_cpu_var(tx_rps_stats)[3];
+		__get_cpu_var(tx_rps_stats)[2] = __get_cpu_var(tx_rps_stats)[3] + __get_cpu_var(tx_rps_stats)[4];
+		trace_rpsd_skb_rx(__get_cpu_var(tx_rps_stats));
+		__get_cpu_var(tx_rps_stats)[0] = 0;
+	}
+}
+#endif

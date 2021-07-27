@@ -53,6 +53,8 @@
 #include <linux/oom.h>
 #include <linux/writeback.h>
 #include <linux/shm.h>
+#include "mt_sched_mon.h"
+#include "mt_cputime.h"
 
 #include <asm/uaccess.h>
 #include <asm/unistd.h>
@@ -292,6 +294,9 @@ kill_orphaned_pgrp(struct task_struct *tsk, struct task_struct *parent)
 {
 	struct pid *pgrp = task_pgrp(tsk);
 	struct task_struct *ignored_task = tsk;
+	//add to avoid zygote orphaned process group start
+	struct task_struct *pgtask = get_pid_task(pgrp, PIDTYPE_PID);
+	int avoid_zygote = 0;
 
 	if (!parent)
 		 /* exit: our father is in a different pgrp than
@@ -304,10 +309,20 @@ kill_orphaned_pgrp(struct task_struct *tsk, struct task_struct *parent)
 		 */
 		ignored_task = NULL;
 
-	if (task_pgrp(parent) != pgrp &&
-	    task_session(parent) == task_session(tsk) &&
-	    will_become_orphaned_pgrp(pgrp, ignored_task) &&
-	    has_stopped_jobs(pgrp)) {
+	if (pgtask != NULL) {
+		if ((!strncmp("main", pgtask->group_leader->comm, TASK_COMM_LEN)) &&
+			(!strncmp("init", pgtask->group_leader->parent->comm, TASK_COMM_LEN))) {
+			/* skip when zygote is the group leader */
+			avoid_zygote = 1;
+		}
+		put_task_struct(pgtask);
+	}
+
+	if (!avoid_zygote &&
+		task_pgrp(parent) != pgrp &&
+		task_session(parent) == task_session(tsk) &&
+		will_become_orphaned_pgrp(pgrp, ignored_task) &&
+		has_stopped_jobs(pgrp)) {
 		__kill_pgrp_info(SIGHUP, SEND_SIG_PRIV, pgrp);
 		__kill_pgrp_info(SIGCONT, SEND_SIG_PRIV, pgrp);
 	}
@@ -718,6 +733,13 @@ void do_exit(long code)
 	int group_dead;
 
 	profile_task_exit(tsk);
+#ifdef CONFIG_SCHEDSTATS
+	/* mt shceduler profiling*/
+        printk(KERN_DEBUG "[%d:%s] exit\n", tsk->pid, tsk->comm);
+	end_mtproc_info(tsk);
+#endif
+	/* mt throttle monitor */
+	end_mt_rt_mon_info(tsk);
 
 	WARN_ON(blk_needs_flush_plug(tsk));
 
@@ -841,7 +863,7 @@ void do_exit(long code)
 	/*
 	 * Make sure we are holding no locks:
 	 */
-	debug_check_no_locks_held(tsk);
+	debug_check_no_locks_held();
 	/*
 	 * We can do this unlocked here. The futex code uses this flag
 	 * just to verify whether the pi state cleanup has been done

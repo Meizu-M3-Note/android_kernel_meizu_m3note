@@ -1,3 +1,6 @@
+#if defined(CONFIG_CMA) && defined(CONFIG_MTK_SVP)
+#else
+
 #ifndef ASM_DMA_CONTIGUOUS_H
 #define ASM_DMA_CONTIGUOUS_H
 
@@ -23,6 +26,8 @@ static inline void dev_set_cma_area(struct device *dev, struct cma *cma)
 }
 
 #endif
+#endif
+
 #endif
 
 #endif

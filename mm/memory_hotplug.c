@@ -1511,6 +1511,11 @@ static int __ref __offline_pages(unsigned long start_pfn,
 	if (zone_idx(zone) <= ZONE_NORMAL && !can_offline_normal(zone, nr_pages))
 		goto out;
 
+#if defined(CONFIG_CMA) && defined(CONFIG_MTK_SVP) /* SVP 12 */
+	if (is_zone_cma(zone))
+		goto out;
+#endif
+
 	/* set above range as isolated */
 	ret = start_isolate_page_range(start_pfn, end_pfn,
 				       MIGRATE_MOVABLE, true);

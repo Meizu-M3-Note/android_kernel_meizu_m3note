@@ -366,6 +366,11 @@ void ext4_validate_block_bitmap(struct super_block *sb,
 		ext4_unlock_group(sb, block_group);
 		ext4_error(sb, "bg %u: block %llu: invalid block bitmap",
 			   block_group, blk);
+#if defined(CONFIG_MT_ENG_BUILD)
+		printk(KERN_ERR "block_bitmap: block %ld\n", bh->b_blocknr);
+		print_hex_dump(KERN_ERR, "block_bitmap: ", DUMP_PREFIX_OFFSET, 16, 4,
+			bh->b_data, bh->b_size, true);
+#endif
 		return;
 	}
 	if (unlikely(!ext4_block_bitmap_csum_verify(sb, block_group,
@@ -526,7 +531,7 @@ static int ext4_has_free_clusters(struct ext4_sb_info *sbi,
 		return 1;
 
 	/* Hm, nope.  Are (enough) root reserved clusters available? */
-	if (uid_eq(sbi->s_resuid, current_fsuid()) ||
+	if (uid_gte(sbi->s_resuid, current_fsuid()) ||
 	    (!gid_eq(sbi->s_resgid, GLOBAL_ROOT_GID) && in_group_p(sbi->s_resgid)) ||
 	    capable(CAP_SYS_RESOURCE) ||
 	    (flags & EXT4_MB_USE_ROOT_BLOCKS)) {

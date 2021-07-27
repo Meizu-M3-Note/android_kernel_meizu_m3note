@@ -36,7 +36,10 @@
 #include <linux/pagevec.h>
 #include <linux/timer.h>
 #include <linux/sched/rt.h>
+#include <linux/mm_inline.h>
 #include <trace/events/writeback.h>
+
+#include "internal.h"
 
 /*
  * Sleep at most 200ms at a time in balance_dirty_pages().
@@ -108,6 +111,7 @@ unsigned int dirty_expire_interval = 30 * 100; /* centiseconds */
  * Flag that makes the machine dump writes/reads and block dirtyings.
  */
 int block_dump;
+EXPORT_SYMBOL_GPL(block_dump);
 
 /*
  * Flag that puts the machine in "laptop mode". Doubles as a timeout in jiffies:
@@ -213,12 +217,27 @@ static unsigned long highmem_dirtyable_memory(unsigned long total)
 #ifdef CONFIG_HIGHMEM
 	int node;
 	unsigned long x = 0;
+#if !defined(CONFIG_CMA) || !defined(CONFIG_MTK_SVP) /* SVP 02 */
 
 	for_each_node_state(node, N_HIGH_MEMORY) {
 		struct zone *z = &NODE_DATA(node)->node_zones[ZONE_HIGHMEM];
 
 		x += zone_dirtyable_memory(z);
 	}
+#else
+	int i;
+
+	for_each_node_state(node, N_HIGH_MEMORY) {
+		/*struct zone *z = &NODE_DATA(node)->node_zones[ZONE_HIGHMEM];*/
+		for (i = 0; i < MAX_NR_ZONES; i++) {
+			struct zone *z = &NODE_DATA(node)->node_zones[i];
+
+		/*x += zone_dirtyable_memory(z);*/
+			if (is_highmem(z))
+				x += zone_dirtyable_memory(z);
+		}
+	}
+#endif
 	/*
 	 * Unreclaimable memory (kernel memory or anonymous memory
 	 * without swap) can bring down the dirtyable pages below

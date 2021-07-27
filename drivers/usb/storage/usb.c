@@ -131,6 +131,16 @@ MODULE_PARM_DESC(quirks, "supplemental list of device IDs and their quirks");
 	.initFunction = init_function,	\
 }
 
+#define HW_UNUSUAL_DEV(idVendor, cl, sc, pr, \
+vendor_name, product_name, use_protocol, use_transport, \
+init_function, Flags) \
+{ \
+.vendorName = vendor_name, \
+.productName = product_name, \
+.useProtocol = use_protocol, \
+.useTransport = use_transport, \
+.initFunction = init_function, \
+}
 static struct us_unusual_dev us_unusual_dev_list[] = {
 #	include "unusual_devs.h"
 	{ }		/* Terminating entry */
@@ -141,6 +151,7 @@ static struct us_unusual_dev for_dynamic_ids =
 
 #undef UNUSUAL_DEV
 #undef COMPLIANT_DEV
+#undef HW_UNUSUAL_DEV
 #undef USUAL_DEV
 #undef UNUSUAL_VENDOR_INTF
 
@@ -568,7 +579,7 @@ static int get_device_info(struct us_data *us, const struct usb_device_id *id,
 	adjust_quirks(us);
 
 	if (us->fflags & US_FL_IGNORE_DEVICE) {
-		dev_info(pdev, "device ignored\n");
+		US_DEBUGPX("device ignored\n");
 		return -ENODEV;
 	}
 
@@ -580,7 +591,7 @@ static int get_device_info(struct us_data *us, const struct usb_device_id *id,
 		us->fflags &= ~US_FL_GO_SLOW;
 
 	if (us->fflags)
-		dev_info(pdev, "Quirks match for vid %04x pid %04x: %lx\n",
+		US_DEBUGPX("Quirks match for vid %04x pid %04x: %lx\n",
 				le16_to_cpu(dev->descriptor.idVendor),
 				le16_to_cpu(dev->descriptor.idProduct),
 				us->fflags);
@@ -605,7 +616,7 @@ static int get_device_info(struct us_data *us, const struct usb_device_id *id,
 			us->protocol == idesc->bInterfaceProtocol)
 			msg += 2;
 		if (msg >= 0 && !(us->fflags & US_FL_NEED_OVERRIDE))
-			dev_notice(pdev, "This device "
+			US_DEBUGPX("This device "
 					"(%04x,%04x,%04x S %02x P %02x)"
 					" has %s in unusual_devs.h (kernel"
 					" %s)\n"
@@ -865,7 +876,7 @@ static void usb_stor_scan_dwork(struct work_struct *work)
 			scan_dwork.work);
 	struct device *dev = &us->pusb_intf->dev;
 
-	dev_dbg(dev, "starting scan\n");
+	US_DEBUGPX("starting scan\n");
 
 	/* For bulk-only devices, determine the max LUN value */
 	if (us->protocol == USB_PR_BULK && !(us->fflags & US_FL_SINGLE_LUN)) {
@@ -874,7 +885,7 @@ static void usb_stor_scan_dwork(struct work_struct *work)
 		mutex_unlock(&us->dev_mutex);
 	}
 	scsi_scan_host(us_to_host(us));
-	dev_dbg(dev, "scan complete\n");
+	US_DEBUGPX("scan complete\n");
 
 	/* Should we unbind if no devices were detected? */
 
@@ -994,8 +1005,7 @@ int usb_stor_probe2(struct us_data *us)
 					dev_name(&us->pusb_intf->dev));
 	result = scsi_add_host(us_to_host(us), dev);
 	if (result) {
-		dev_warn(dev,
-				"Unable to add the scsi host\n");
+		US_DEBUGPX("Unable to add the scsi host\n");
 		goto BadDevice;
 	}
 
@@ -1004,7 +1014,7 @@ int usb_stor_probe2(struct us_data *us)
 	set_bit(US_FLIDX_SCAN_PENDING, &us->dflags);
 
 	if (delay_use > 0)
-		dev_dbg(dev, "waiting for device to settle before scanning\n");
+		US_DEBUGPX("waiting for device to settle before scanning\n");
 	queue_delayed_work(system_freezable_wq, &us->scan_dwork,
 			delay_use * HZ);
 	return 0;
@@ -1085,4 +1095,6 @@ static struct usb_driver usb_storage_driver = {
 	.soft_unbind =	1,
 };
 
+bool usb_storage_debug = false;
+module_param(usb_storage_debug, bool, 0644);
 module_usb_driver(usb_storage_driver);

@@ -25,7 +25,6 @@
 #include <linux/slab.h>
 #include <linux/mutex.h>
 
-
 #ifdef CONFIG_UNIX98_PTYS
 static struct tty_driver *ptm_driver;
 static struct tty_driver *pts_driver;
@@ -47,9 +46,11 @@ static void pty_close(struct tty_struct *tty, struct file *filp)
 	wake_up_interruptible(&tty->read_wait);
 	wake_up_interruptible(&tty->write_wait);
 	tty->packet = 0;
+	tty->peer_stops = 0; 
 	/* Review - krefs on tty_link ?? */
 	if (!tty->link)
 		return;
+	tty->link->peer_stops = 0;
 	set_bit(TTY_OTHER_CLOSED, &tty->link->flags);
 	wake_up_interruptible(&tty->link->read_wait);
 	wake_up_interruptible(&tty->link->write_wait);
@@ -118,7 +119,7 @@ static int pty_write(struct tty_struct *tty, const unsigned char *buf, int c)
 {
 	struct tty_struct *to = tty->link;
 
-	if (tty->stopped)
+	if (tty->stopped || tty->peer_stops)
 		return 0;
 
 	if (c > 0) {
@@ -143,7 +144,7 @@ static int pty_write(struct tty_struct *tty, const unsigned char *buf, int c)
 
 static int pty_write_room(struct tty_struct *tty)
 {
-	if (tty->stopped)
+	if (tty->stopped || tty->peer_stops)
 		return 0;
 	return pty_space(tty->link);
 }
@@ -214,9 +215,6 @@ static int pty_signal(struct tty_struct *tty, int sig)
 {
 	unsigned long flags;
 	struct pid *pgrp;
-
-	if (sig != SIGINT && sig != SIGQUIT && sig != SIGTSTP)
-		return -EINVAL;
 
 	if (tty->link) {
 		spin_lock_irqsave(&tty->link->ctrl_lock, flags);
@@ -548,6 +546,11 @@ static inline void legacy_pty_init(void) { }
 
 static struct cdev ptmx_cdev;
 
+#define TCOOFF 0
+#define TCOON 1
+#define TCIOFF 2
+#define TCION 3
+
 static int pty_unix98_ioctl(struct tty_struct *tty,
 			    unsigned int cmd, unsigned long arg)
 {
@@ -564,6 +567,30 @@ static int pty_unix98_ioctl(struct tty_struct *tty,
 		return put_user(tty->index, (unsigned int __user *)arg);
 	case TIOCSIG:    /* Send signal to other side of pty */
 		return pty_signal(tty, (int) arg);
+	}
+
+	return -ENOIOCTLCMD;
+}
+
+static int pts_unix98_ioctl(struct tty_struct *tty,
+			    unsigned int cmd, unsigned long arg)
+{
+	switch (cmd) {
+	case TCXONC: /* Flow Control */
+		switch (arg) {
+		case TCIOFF:
+			break;
+		case TCION:
+			tty->link->peer_stops=0;           
+			if (waitqueue_active(&tty->link->write_wait))
+				wake_up_interruptible(&tty->link->write_wait);
+			break;
+		default:
+			return -EINVAL;
+		}
+		return 0;
+	default:
+		break;
 	}
 
 	return -ENOIOCTLCMD;
@@ -656,6 +683,7 @@ static const struct tty_operations pty_unix98_ops = {
 	.chars_in_buffer = pty_chars_in_buffer,
 	.unthrottle = pty_unthrottle,
 	.set_termios = pty_set_termios,
+	.ioctl = pts_unix98_ioctl,
 	.shutdown = pty_unix98_shutdown,
 	.cleanup = pty_cleanup,
 };

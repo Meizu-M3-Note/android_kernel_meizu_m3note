@@ -35,6 +35,12 @@ struct vm_area_struct;
 #define ___GFP_NO_KSWAPD	0x400000u
 #define ___GFP_OTHER_NODE	0x800000u
 #define ___GFP_WRITE		0x1000000u
+#define ___GFP_SLOWHIGHMEM	0x2000000u
+#define ___GFP_NOMTKPASR	0x4000000u
+#if defined(CONFIG_CMA) && defined(CONFIG_MTK_SVP)
+#define ___GFP_NOZONECMA	0x8000000u
+#define ___GFP_ZONEPCO		0x10000000u
+#endif
 /* If the above are modified, __GFP_BITS_SHIFT may need updating */
 
 /*
@@ -92,6 +98,12 @@ struct vm_area_struct;
 #define __GFP_OTHER_NODE ((__force gfp_t)___GFP_OTHER_NODE) /* On behalf of other node */
 #define __GFP_KMEMCG	((__force gfp_t)___GFP_KMEMCG) /* Allocation comes from a memcg-accounted resource */
 #define __GFP_WRITE	((__force gfp_t)___GFP_WRITE)	/* Allocator intends to dirty page */
+#define __GFP_SLOWHIGHMEM  ((__force gfp_t)___GFP_SLOWHIGHMEM)	/* use highmem only in slowpath */
+#define __GFP_NOMTKPASR	((__force gfp_t)___GFP_NOMTKPASR) /* Memory allocation can't be extended to MTKPASR-imposed range */
+#if defined(CONFIG_CMA) && defined(CONFIG_MTK_SVP)
+#define __GFP_NOZONECMA	((__force gfp_t)___GFP_NOZONECMA) /* Memory allocation can't be extended to ZONE CMA */
+#define __GFP_ZONEPCO	((__force gfp_t)___GFP_ZONEPCO) /* Memory allocation will be from ZONE CMA */
+#endif
 
 /*
  * This may seem redundant, but it's a way of annotating false positives vs.
@@ -99,7 +111,11 @@ struct vm_area_struct;
  */
 #define __GFP_NOTRACK_FALSE_POSITIVE (__GFP_NOTRACK)
 
-#define __GFP_BITS_SHIFT 25	/* Room for N __GFP_FOO bits */
+#if !defined(CONFIG_CMA) || !defined(CONFIG_MTK_SVP)
+#define __GFP_BITS_SHIFT 27	/* Room for N __GFP_FOO bits */
+#else
+#define __GFP_BITS_SHIFT 29	/* Room for N __GFP_FOO bits */
+#endif
 #define __GFP_BITS_MASK ((__force gfp_t)((1 << __GFP_BITS_SHIFT) - 1))
 
 /* This equals 0, but use constants in case they ever change */
@@ -184,6 +200,14 @@ static inline int allocflags_to_migratetype(gfp_t gfp_flags)
 #define OPT_ZONE_DMA32 ZONE_NORMAL
 #endif
 
+#if defined(CONFIG_CMA) && defined(CONFIG_MTK_SVP) /* SVP 13 */
+#ifdef CONFIG_CMA
+#define OPT_ZONE_CMA ZONE_CMA
+#else
+#define OPT_ZONE_CMA ZONE_MOVABLE
+#endif
+#endif
+
 /*
  * GFP_ZONE_TABLE is a word size bitstring that is used for looking up the
  * zone to use given the lowest 4 bits of gfp_t. Entries are ZONE_SHIFT long
@@ -217,10 +241,13 @@ static inline int allocflags_to_migratetype(gfp_t gfp_flags)
  * ZONES_SHIFT must be <= 2 on 32 bit platforms.
  */
 
+#if !defined(CONFIG_CMA) || !defined(CONFIG_MTK_SVP) /* SVP 12 */
 #if 16 * ZONES_SHIFT > BITS_PER_LONG
 #error ZONES_SHIFT too large to create GFP_ZONE_TABLE integer
 #endif
+#endif
 
+#if !defined(CONFIG_CMA) || !defined(CONFIG_MTK_SVP) /* SVP 13 *//* SVP 12 */
 #define GFP_ZONE_TABLE ( \
 	(ZONE_NORMAL << 0 * ZONES_SHIFT)				      \
 	| (OPT_ZONE_DMA << ___GFP_DMA * ZONES_SHIFT)			      \
@@ -231,6 +258,21 @@ static inline int allocflags_to_migratetype(gfp_t gfp_flags)
 	| (ZONE_MOVABLE << (___GFP_MOVABLE | ___GFP_HIGHMEM) * ZONES_SHIFT)   \
 	| (OPT_ZONE_DMA32 << (___GFP_MOVABLE | ___GFP_DMA32) * ZONES_SHIFT)   \
 )
+
+#else
+
+#define GFP_ZONE_TABLE ( \
+	((u64)ZONE_NORMAL << 0 * ZONES_SHIFT)				      \
+	| ((u64)OPT_ZONE_DMA << ___GFP_DMA * ZONES_SHIFT)		      \
+	| ((u64)OPT_ZONE_HIGHMEM << ___GFP_HIGHMEM * ZONES_SHIFT)	      \
+	| ((u64)OPT_ZONE_DMA32 << ___GFP_DMA32 * ZONES_SHIFT)		      \
+	| ((u64)ZONE_NORMAL << ___GFP_MOVABLE * ZONES_SHIFT)		      \
+	| ((u64)OPT_ZONE_DMA << (___GFP_MOVABLE | ___GFP_DMA) * ZONES_SHIFT)  \
+	| ((u64)OPT_ZONE_CMA << (___GFP_MOVABLE|___GFP_HIGHMEM) * ZONES_SHIFT)\
+	| ((u64)OPT_ZONE_DMA32 << (___GFP_MOVABLE|___GFP_DMA32) * ZONES_SHIFT)\
+)
+
+#endif
 
 /*
  * GFP_ZONE_BAD is a bitmap for all combinations of __GFP_DMA, __GFP_DMA32
@@ -249,6 +291,11 @@ static inline int allocflags_to_migratetype(gfp_t gfp_flags)
 	| 1 << (___GFP_MOVABLE | ___GFP_DMA32 | ___GFP_DMA | ___GFP_HIGHMEM)  \
 )
 
+#if defined(CONFIG_CMA) && defined(CONFIG_MTK_SVP)
+extern void adjust_forbid_cma_alloc_flag(int flag);
+extern int get_forbid_cma_alloc_flag(void);
+#endif
+
 static inline enum zone_type gfp_zone(gfp_t flags)
 {
 	enum zone_type z;
@@ -257,6 +304,12 @@ static inline enum zone_type gfp_zone(gfp_t flags)
 	z = (GFP_ZONE_TABLE >> (bit * ZONES_SHIFT)) &
 					 ((1 << ZONES_SHIFT) - 1);
 	VM_BUG_ON((GFP_ZONE_BAD >> bit) & 1);
+
+#if defined(CONFIG_CMA) && defined(CONFIG_MTK_SVP)
+	if (is_zone_cma_idx(z) && (!(flags & __GFP_ZONEPCO) || get_forbid_cma_alloc_flag()))
+		z = ZONE_MOVABLE;
+#endif
+
 	return z;
 }
 
@@ -404,13 +457,23 @@ static inline bool pm_suspended_storage(void)
 
 #ifdef CONFIG_CMA
 
+#if defined(CONFIG_CMA) && defined(CONFIG_MTK_SVP)
+/* The below functions must be run on a range from a single zone. */
+extern int alloc_contig_range(unsigned long start, unsigned long end,
+			      unsigned migratetype, unsigned newpagemovable);
+#else
 /* The below functions must be run on a range from a single zone. */
 extern int alloc_contig_range(unsigned long start, unsigned long end,
 			      unsigned migratetype);
+#endif
 extern void free_contig_range(unsigned long pfn, unsigned nr_pages);
 
 /* CMA stuff */
+#if !defined(CONFIG_CMA) || !defined(CONFIG_MTK_SVP) /* SVP 13 */
 extern void init_cma_reserved_pageblock(struct page *page);
+#else
+extern void init_cma_reserved_pageblock(unsigned long pfn);
+#endif
 
 #endif
 

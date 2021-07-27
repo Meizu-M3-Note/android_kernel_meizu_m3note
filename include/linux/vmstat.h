@@ -152,6 +152,7 @@ static inline unsigned long node_page_state(int node,
 				 enum zone_stat_item item)
 {
 	struct zone *zones = NODE_DATA(node)->node_zones;
+#if !defined(CONFIG_CMA) || !defined(CONFIG_MTK_SVP) /* SVP 04 */
 
 	return
 #ifdef CONFIG_ZONE_DMA
@@ -165,6 +166,15 @@ static inline unsigned long node_page_state(int node,
 #endif
 		zone_page_state(&zones[ZONE_NORMAL], item) +
 		zone_page_state(&zones[ZONE_MOVABLE], item);
+#else
+	int i;
+	unsigned long count = 0;
+
+	for (i = 0; i < MAX_NR_ZONES; i++)
+		count += zone_page_state(zones + i, item);
+
+	return count;
+#endif
 }
 
 extern void zone_statistics(struct zone *, struct zone *, gfp_t gfp);
@@ -257,6 +267,7 @@ static inline void drain_zonestat(struct zone *zone,
 			struct per_cpu_pageset *pset) { }
 #endif		/* CONFIG_SMP */
 
+#if !defined(CONFIG_CMA) || !defined(CONFIG_MTK_SVP) /* SVP 16 */
 static inline void __mod_zone_freepage_state(struct zone *zone, int nr_pages,
 					     int migratetype)
 {
@@ -264,6 +275,7 @@ static inline void __mod_zone_freepage_state(struct zone *zone, int nr_pages,
 	if (is_migrate_cma(migratetype))
 		__mod_zone_page_state(zone, NR_FREE_CMA_PAGES, nr_pages);
 }
+#endif
 
 extern const char * const vmstat_text[];
 

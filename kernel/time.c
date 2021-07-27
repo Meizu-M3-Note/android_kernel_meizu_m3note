@@ -41,6 +41,7 @@
 #include <asm/uaccess.h>
 #include <asm/unistd.h>
 
+#include <mach/mt_ccci_common.h>
 #include "timeconst.h"
 
 /*
@@ -179,6 +180,9 @@ int do_sys_settimeofday(const struct timespec *tv, const struct timezone *tz)
 			if (!tv)
 				warp_clock();
 		}
+#ifdef CONFIG_MTK_CCCI_DEVICES
+		notify_time_update();
+#endif
 	}
 	if (tv)
 		return do_settimeofday(tv);

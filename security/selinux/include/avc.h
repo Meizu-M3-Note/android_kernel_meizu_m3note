@@ -102,7 +102,7 @@ static inline u32 avc_audit_required(u32 requested,
 }
 
 int slow_avc_audit(u32 ssid, u32 tsid, u16 tclass,
-		   u32 requested, u32 audited, u32 denied,
+		   u32 requested, u32 audited, u32 denied, int result,
 		   struct common_audit_data *a,
 		   unsigned flags);
 
@@ -137,7 +137,7 @@ static inline int avc_audit(u32 ssid, u32 tsid,
 	if (likely(!audited))
 		return 0;
 	return slow_avc_audit(ssid, tsid, tclass,
-			      requested, audited, denied,
+			      requested, audited, denied, result,
 			      a, flags);
 }
 
@@ -181,6 +181,11 @@ void avc_disable(void);
 
 #ifdef CONFIG_SECURITY_SELINUX_AVC_STATS
 DECLARE_PER_CPU(struct avc_cache_stats, avc_cache_stats);
+#endif
+
+#ifdef CONFIG_MTK_AEE_FEATURE
+extern struct sk_buff *audit_get_skb(struct audit_buffer *ab);
+extern void mtk_audit_hook(char *data);
 #endif
 
 #endif /* _SELINUX_AVC_H_ */

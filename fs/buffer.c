@@ -83,6 +83,40 @@ void unlock_buffer(struct buffer_head *bh)
 EXPORT_SYMBOL(unlock_buffer);
 
 /*
+ * Returns if the page has dirty or writeback buffers. If all the buffers
+ * are unlocked and clean then the PageDirty information is stale. If
+ * any of the pages are locked, it is assumed they are locked for IO.
+ */
+void buffer_check_dirty_writeback(struct page *page,
+				     bool *dirty, bool *writeback)
+{
+	struct buffer_head *head, *bh;
+	*dirty = false;
+	*writeback = false;
+
+	BUG_ON(!PageLocked(page));
+
+	if (!page_has_buffers(page))
+		return;
+
+	if (PageWriteback(page))
+		*writeback = true;
+
+	head = page_buffers(page);
+	bh = head;
+	do {
+		if (buffer_locked(bh))
+			*writeback = true;
+
+		if (buffer_dirty(bh))
+			*dirty = true;
+
+		bh = bh->b_this_page;
+	} while (bh != head);
+}
+EXPORT_SYMBOL(buffer_check_dirty_writeback);
+
+/*
  * Block until a buffer comes unlocked.  This doesn't stop it
  * from becoming locked again - you have to lock it yourself
  * if you want to preserve its state.
@@ -964,18 +998,39 @@ init_page_buffers(struct page *page, struct block_device *bdev,
  *
  * This is used purely for blockdev mappings.
  */
+#if defined(CONFIG_CMA) && defined(CONFIG_MTK_SVP)
+static int
+grow_dev_page(struct block_device *bdev, sector_t block,
+	      pgoff_t index, int size, int sizebits, gfp_t gfp)
+#else
 static int
 grow_dev_page(struct block_device *bdev, sector_t block,
 		pgoff_t index, int size, int sizebits)
+#endif
 {
 	struct inode *inode = bdev->bd_inode;
 	struct page *page;
 	struct buffer_head *bh;
 	sector_t end_block;
 	int ret = 0;		/* Will call free_more_memory() */
+#if defined(CONFIG_CMA) && defined(CONFIG_MTK_SVP)
+	gfp_t gfp_mask;
 
+	gfp_mask = (mapping_gfp_mask(inode->i_mapping) & ~__GFP_FS) | gfp;
+
+	/*
+	 * XXX: __getblk_slow() can not really deal with failure and
+	 * will endlessly loop on improvised global reclaim.  Prefer
+	 * looping in the allocator rather than here, at least that
+	 * code knows what it's doing.
+	 */
+	gfp_mask |= __GFP_NOFAIL;
+
+	page = find_or_create_page(inode->i_mapping, index, gfp_mask);
+#else
 	page = find_or_create_page(inode->i_mapping, index,
 		(mapping_gfp_mask(inode->i_mapping) & ~__GFP_FS)|__GFP_MOVABLE);
+#endif
 	if (!page)
 		return ret;
 
@@ -1022,8 +1077,13 @@ failed:
  * Create buffers for the specified block device block's page.  If
  * that page was dirty, the buffers are set dirty also.
  */
+#if defined(CONFIG_CMA) && defined(CONFIG_MTK_SVP)
+static int
+grow_buffers(struct block_device *bdev, sector_t block, int size, gfp_t gfp)
+#else
 static int
 grow_buffers(struct block_device *bdev, sector_t block, int size)
+#endif
 {
 	pgoff_t index;
 	int sizebits;
@@ -1050,11 +1110,21 @@ grow_buffers(struct block_device *bdev, sector_t block, int size)
 	}
 
 	/* Create a page with the proper size buffers.. */
+#if defined(CONFIG_CMA) && defined(CONFIG_MTK_SVP)
+	return grow_dev_page(bdev, block, index, size, sizebits, gfp);
+#else
 	return grow_dev_page(bdev, block, index, size, sizebits);
+#endif
 }
 
+#if defined(CONFIG_CMA) && defined(CONFIG_MTK_SVP)
+struct buffer_head *
+__getblk_slow(struct block_device *bdev, sector_t block,
+	     unsigned size, gfp_t gfp)
+#else
 static struct buffer_head *
 __getblk_slow(struct block_device *bdev, sector_t block, int size)
+#endif
 {
 	/* Size must be multiple of hard sectorsize */
 	if (unlikely(size & (bdev_logical_block_size(bdev)-1) ||
@@ -1076,13 +1146,20 @@ __getblk_slow(struct block_device *bdev, sector_t block, int size)
 		if (bh)
 			return bh;
 
+#if defined(CONFIG_CMA) && defined(CONFIG_MTK_SVP)
+		ret = grow_buffers(bdev, block, size, gfp);
+#else
 		ret = grow_buffers(bdev, block, size);
+#endif
 		if (ret < 0)
 			return NULL;
 		if (ret == 0)
 			free_more_memory();
 	}
 }
+#if defined(CONFIG_CMA) && defined(CONFIG_MTK_SVP)
+EXPORT_SYMBOL(__getblk_slow);
+#endif
 
 /*
  * The relationship between dirty buffers and dirty pages:
@@ -1189,10 +1266,18 @@ static struct buffer_head *__bread_slow(struct buffer_head *bh)
 	lock_buffer(bh);
 	if (buffer_uptodate(bh)) {
 		unlock_buffer(bh);
+#ifdef FEATURE_STORAGE_META_LOG
+		if( bh && bh->b_bdev && bh->b_bdev->bd_disk)
+			set_metadata_rw_status(bh->b_bdev->bd_disk->first_minor, HIT_READ_CNT);
+#endif
 		return bh;
 	} else {
 		get_bh(bh);
 		bh->b_end_io = end_buffer_read_sync;
+#ifdef FEATURE_STORAGE_META_LOG
+		if( bh && bh->b_bdev && bh->b_bdev->bd_disk)
+			set_metadata_rw_status(bh->b_bdev->bd_disk->first_minor, WAIT_READ_CNT);
+#endif
 		submit_bh(READ, bh);
 		wait_on_buffer(bh);
 		if (buffer_uptodate(bh))
@@ -1334,6 +1419,8 @@ __find_get_block(struct block_device *bdev, sector_t block, unsigned size)
 }
 EXPORT_SYMBOL(__find_get_block);
 
+#if !defined(CONFIG_CMA) || !defined(CONFIG_MTK_SVP)
+
 /*
  * __getblk will locate (and, if necessary, create) the buffer_head
  * which corresponds to the passed block_device, block and size. The
@@ -1354,6 +1441,29 @@ __getblk(struct block_device *bdev, sector_t block, unsigned size)
 }
 EXPORT_SYMBOL(__getblk);
 
+#else
+/*
+ * __getblk_gfp() will locate (and, if necessary, create) the buffer_head
+ * which corresponds to the passed block_device, block and size. The
+ * returned buffer has its reference count incremented.
+ *
+ * __getblk_gfp() will lock up the machine if grow_dev_page's
+ * try_to_free_buffers() attempt is failing.  FIXME, perhaps?
+ */
+struct buffer_head *
+__getblk_gfp(struct block_device *bdev, sector_t block,
+	     unsigned size, gfp_t gfp)
+{
+	struct buffer_head *bh = __find_get_block(bdev, block, size);
+
+	might_sleep();
+	if (bh == NULL)
+		bh = __getblk_slow(bdev, block, size, gfp);
+	return bh;
+}
+EXPORT_SYMBOL(__getblk_gfp);
+#endif
+
 /*
  * Do async read-ahead on a buffer..
  */
@@ -1366,6 +1476,8 @@ void __breadahead(struct block_device *bdev, sector_t block, unsigned size)
 	}
 }
 EXPORT_SYMBOL(__breadahead);
+
+#if !defined(CONFIG_CMA) || !defined(CONFIG_MTK_SVP)
 
 /**
  *  __bread() - reads a specified block and returns the bh
@@ -1386,6 +1498,32 @@ __bread(struct block_device *bdev, sector_t block, unsigned size)
 	return bh;
 }
 EXPORT_SYMBOL(__bread);
+
+#else
+/**
+ *  __bread_gfp() - reads a specified block and returns the bh
+ *  @bdev: the block_device to read from
+ *  @block: number of block
+ *  @size: size (in bytes) to read
+ *  @gfp: page allocation flag
+ *
+ *  Reads a specified block, and returns buffer head that contains it.
+ *  The page cache can be allocated from non-movable area
+ *  not to prevent page migration if you set gfp to zero.
+ *  It returns NULL if the block was unreadable.
+ */
+struct buffer_head *
+__bread_gfp(struct block_device *bdev, sector_t block,
+		   unsigned size, gfp_t gfp)
+{
+	struct buffer_head *bh = __getblk_gfp(bdev, block, size, gfp);
+
+	if (likely(bh) && !buffer_uptodate(bh))
+		bh = __bread_slow(bh);
+	return bh;
+}
+EXPORT_SYMBOL(__bread_gfp);
+#endif
 
 /*
  * invalidate_bh_lrus() is called rarely - but not only at unmount.
@@ -3101,6 +3239,10 @@ int __sync_dirty_buffer(struct buffer_head *bh, int rw)
 	if (test_clear_buffer_dirty(bh)) {
 		get_bh(bh);
 		bh->b_end_io = end_buffer_write_sync;
+#ifdef FEATURE_STORAGE_META_LOG
+		if( bh && bh->b_bdev && bh->b_bdev->bd_disk)
+			set_metadata_rw_status(bh->b_bdev->bd_disk->first_minor, WAIT_WRITE_CNT);
+#endif
 		ret = submit_bh(rw, bh);
 		wait_on_buffer(bh);
 		if (!ret && !buffer_uptodate(bh))
@@ -3364,6 +3506,10 @@ int bh_submit_read(struct buffer_head *bh)
 
 	get_bh(bh);
 	bh->b_end_io = end_buffer_read_sync;
+#ifdef FEATURE_STORAGE_META_LOG
+	if( bh && bh->b_bdev && bh->b_bdev->bd_disk)
+		set_metadata_rw_status(bh->b_bdev->bd_disk->first_minor, WAIT_READ_CNT);
+#endif
 	submit_bh(READ, bh);
 	wait_on_buffer(bh);
 	if (buffer_uptodate(bh))

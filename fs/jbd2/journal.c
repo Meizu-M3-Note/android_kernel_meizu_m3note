@@ -1221,7 +1221,11 @@ journal_t * jbd2_journal_init_inode (struct inode *inode)
 		goto out_err;
 	}
 
+#if defined(CONFIG_CMA) && defined(CONFIG_MTK_SVP)
+	bh = getblk_unmovable(journal->j_dev, blocknr, journal->j_blocksize);
+#else
 	bh = __getblk(journal->j_dev, blocknr, journal->j_blocksize);
+#endif
 	if (!bh) {
 		printk(KERN_ERR
 		       "%s: Cannot get buffer for journal superblock\n",

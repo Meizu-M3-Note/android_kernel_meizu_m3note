@@ -156,7 +156,11 @@ extern enum zone_type policy_zone;
 
 static inline void check_highest_zone(enum zone_type k)
 {
+#if !defined(CONFIG_CMA) || !defined(CONFIG_MTK_SVP) /* SVP 12 */
 	if (k > policy_zone && k != ZONE_MOVABLE)
+#else
+	if (k > policy_zone && k != ZONE_MOVABLE && !is_zone_cma_idx(k))
+#endif
 		policy_zone = k;
 }
 

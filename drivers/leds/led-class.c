@@ -66,8 +66,43 @@ static ssize_t led_max_brightness_show(struct device *dev,
 	return sprintf(buf, "%u\n", led_cdev->max_brightness);
 }
 
+
+
+/********************************************************************/
+#if(1)			//add zal1518 for mz need by 20160222 
+static ssize_t led_blink_mz_show(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	struct led_classdev *led_cdev = dev_get_drvdata(dev);
+	return sprintf(buf, "%u\n", led_cdev->blink_mz);
+}
+
+static ssize_t led_blink_mz_store(struct device *dev,
+		struct device_attribute *attr, const char *buf, size_t size)
+{
+	struct led_classdev *led_cdev = dev_get_drvdata(dev);
+	unsigned long state;
+	ssize_t ret = -EINVAL;
+
+	ret = kstrtoul(buf, 10, &state);
+	if (ret)
+		return ret;
+
+	if (state == LED_OFF)
+		led_trigger_remove(led_cdev);
+		__led_set_mz_blink(led_cdev, state);
+	return size;
+}
+#endif
+/***********************************************************************/
+
+
 static struct device_attribute led_class_attrs[] = {
 	__ATTR(brightness, 0644, led_brightness_show, led_brightness_store),
+
+#if(1)	//add zal1518 for mz need by 20160222 
+			__ATTR(blink, 0644, led_blink_mz_show, led_blink_mz_store),
+#endif
 	__ATTR(max_brightness, 0444, led_max_brightness_show, NULL),
 #ifdef CONFIG_LEDS_TRIGGERS
 	__ATTR(trigger, 0644, led_trigger_show, led_trigger_store),

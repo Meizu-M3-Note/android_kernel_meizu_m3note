@@ -5,7 +5,9 @@
 #ifdef CONFIG_CMA
 
 #include <linux/types.h>
+#ifndef CONFIG_MTK_SVP
 #include <asm-generic/dma-contiguous.h>
+#endif
 
 void dma_contiguous_early_fixup(phys_addr_t base, unsigned long size);
 

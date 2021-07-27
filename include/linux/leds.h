@@ -69,7 +69,9 @@ struct led_classdev {
 	unsigned long		 blink_delay_on, blink_delay_off;
 	struct timer_list	 blink_timer;
 	int			 blink_brightness;
-
+#if(1)			 //add zal1518 for mz need by 20160222 
+	int			 blink_mz;		
+#endif
 	struct work_struct	set_brightness_work;
 	int			delayed_set_value;
 
@@ -286,3 +288,15 @@ static inline void ledtrig_cpu(enum cpu_led_event evt)
 #endif
 
 #endif		/* __LINUX_LEDS_H_INCLUDED */
+
+/*****************************************************************
+ * [MTK]The patch increases LED brightness level adjustment by adding 
+ * 
+ *
+ *
+ */
+#define LED_INCREASE_LED_LEVEL_MTKPATCH
+#ifdef LED_INCREASE_LED_LEVEL_MTKPATCH
+#define LED_RESERVEBIT_SHIFT 16
+#define LED_RESERVEBIT_PATTERN 1
+#endif

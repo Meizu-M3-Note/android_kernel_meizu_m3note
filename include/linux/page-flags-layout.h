@@ -21,6 +21,27 @@
 #error ZONES_SHIFT -- too many zones configured adjust calculation
 #endif
 
+#if defined(CONFIG_CMA) && defined(CONFIG_MTK_SVP) /* SVP 12 */
+
+#ifdef ZONES_SHIFT
+#undef ZONES_SHIFT
+#endif
+
+#if MAX_NR_ZONES < 2
+#define ZONES_SHIFT 0
+#elif MAX_NR_ZONES <= 2
+#define ZONES_SHIFT 1
+#elif MAX_NR_ZONES <= 4
+#define ZONES_SHIFT 2
+/* SVP */
+#elif MAX_NR_ZONES <= 8
+#define ZONES_SHIFT 3
+#else
+#error ZONES_SHIFT -- too many zones configured adjust calculation
+#endif
+
+#endif
+
 #ifdef CONFIG_SPARSEMEM
 #include <asm/sparsemem.h>
 

@@ -241,6 +241,15 @@ static inline struct page *page_cache_alloc_readahead(struct address_space *x)
 				  __GFP_COLD | __GFP_NORETRY | __GFP_NOWARN);
 }
 
+#if defined(CONFIG_CMA) && defined(CONFIG_MTK_SVP)
+static inline struct page *page_cache_alloc_readahead_zonepco(struct address_space *x)
+{
+	return __page_cache_alloc(mapping_gfp_mask(x) |
+/*				  __GFP_COLD | __GFP_NORETRY | __GFP_NOWARN);*/
+				  __GFP_COLD | __GFP_NORETRY | __GFP_NOWARN | __GFP_ZONEPCO);
+}
+#endif
+
 typedef int filler_t(void *, struct page *);
 
 extern struct page * find_get_page(struct address_space *mapping,

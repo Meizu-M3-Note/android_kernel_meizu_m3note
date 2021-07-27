@@ -141,6 +141,45 @@ out:
 	return ret;
 }
 
+#if defined(CONFIG_CMA) && defined(CONFIG_MTK_SVP)
+static int _new_filter(const unsigned char * pfilpname)
+{
+	int vstrlen = 0;
+	int ret = 0;
+
+	if (!pfilpname)
+		goto filterout;
+
+	vstrlen = strlen(pfilpname);
+
+	if (vstrlen >= 5) {
+#if 1
+		if (!strcmp(pfilpname + vstrlen - 4, ".oat") ||
+			!strcmp(pfilpname + vstrlen - 4, ".art") ||
+			!strcmp(pfilpname + vstrlen - 4, ".dex") ||
+			!strcmp(pfilpname + vstrlen - 4, ".apk") ||
+			!strcmp(pfilpname + vstrlen - 4, ".ttf") )
+			ret = 1;
+#else
+		if (*(pfilpname + vstrlen - 4) == '.')
+			ret = 1;
+#endif
+	}
+	else if (vstrlen >= 4) {
+#if 1
+		if (!strcmp(pfilpname + vstrlen - 3, ".so"))
+			ret = 1;
+#else
+		if (*(pfilpname + vstrlen - 3) == '.')
+			ret = 1;
+#endif
+	}
+
+filterout:
+	return ret;
+}
+#endif
+
 /*
  * __do_page_cache_readahead() actually reads a chunk of disk.  It allocates all
  * the pages first, then submits them all for I/O. This avoids the very bad
@@ -161,11 +200,18 @@ __do_page_cache_readahead(struct address_space *mapping, struct file *filp,
 	int page_idx;
 	int ret = 0;
 	loff_t isize = i_size_read(inode);
+#if defined(CONFIG_CMA) && defined(CONFIG_MTK_SVP)
+	int newflag = 0;
+#endif
 
 	if (isize == 0)
 		goto out;
 
 	end_index = ((isize - 1) >> PAGE_CACHE_SHIFT);
+
+#if defined(CONFIG_CMA) && defined(CONFIG_MTK_SVP)
+/*	newflag = _new_filter(filp->f_path.dentry->d_name.name);*/
+#endif
 
 	/*
 	 * Preallocate as many pages as we will need.
@@ -182,7 +228,15 @@ __do_page_cache_readahead(struct address_space *mapping, struct file *filp,
 		if (page)
 			continue;
 
+#if !defined(CONFIG_CMA) || !defined(CONFIG_MTK_SVP)
 		page = page_cache_alloc_readahead(mapping);
+#else
+		if (newflag)
+			page = page_cache_alloc_readahead_zonepco(mapping);
+		else
+			page = page_cache_alloc_readahead(mapping);
+#endif
+
 		if (!page)
 			break;
 		page->index = page_offset;

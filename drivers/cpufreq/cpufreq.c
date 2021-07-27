@@ -17,7 +17,9 @@
 
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 
+#include <asm/cputime.h>
 #include <linux/kernel.h>
+#include <linux/kernel_stat.h>
 #include <linux/module.h>
 #include <linux/init.h>
 #include <linux/notifier.h>
@@ -25,6 +27,7 @@
 #include <linux/delay.h>
 #include <linux/interrupt.h>
 #include <linux/spinlock.h>
+#include <linux/tick.h>
 #include <linux/device.h>
 #include <linux/slab.h>
 #include <linux/cpu.h>
@@ -133,6 +136,51 @@ bool have_governor_per_policy(void)
 {
 	return cpufreq_driver->have_governor_per_policy;
 }
+EXPORT_SYMBOL_GPL(have_governor_per_policy);
+
+struct kobject *get_governor_parent_kobj(struct cpufreq_policy *policy)
+{
+	if (have_governor_per_policy())
+		return &policy->kobj;
+	else
+		return cpufreq_global_kobject;
+}
+EXPORT_SYMBOL_GPL(get_governor_parent_kobj);
+
+static inline u64 get_cpu_idle_time_jiffy(unsigned int cpu, u64 *wall)
+{
+	u64 idle_time;
+	u64 cur_wall_time;
+	u64 busy_time;
+
+	cur_wall_time = jiffies64_to_cputime64(get_jiffies_64());
+
+	busy_time = kcpustat_cpu(cpu).cpustat[CPUTIME_USER];
+	busy_time += kcpustat_cpu(cpu).cpustat[CPUTIME_SYSTEM];
+	busy_time += kcpustat_cpu(cpu).cpustat[CPUTIME_IRQ];
+	busy_time += kcpustat_cpu(cpu).cpustat[CPUTIME_SOFTIRQ];
+	busy_time += kcpustat_cpu(cpu).cpustat[CPUTIME_STEAL];
+	busy_time += kcpustat_cpu(cpu).cpustat[CPUTIME_NICE];
+
+	idle_time = cur_wall_time - busy_time;
+	if (wall)
+		*wall = cputime_to_usecs(cur_wall_time);
+
+	return cputime_to_usecs(idle_time);
+}
+
+u64 get_cpu_idle_time(unsigned int cpu, u64 *wall, int io_busy)
+{
+	u64 idle_time = get_cpu_idle_time_us(cpu, io_busy ? wall : NULL);
+
+	if (idle_time == -1ULL)
+		return get_cpu_idle_time_jiffy(cpu, wall);
+	else if (!io_busy)
+		idle_time += get_cpu_iowait_time_us(cpu, wall);
+
+	return idle_time;
+}
+EXPORT_SYMBOL_GPL(get_cpu_idle_time);
 
 static struct cpufreq_policy *__cpufreq_cpu_get(unsigned int cpu, bool sysfs)
 {
@@ -1852,6 +1900,50 @@ no_policy:
 }
 EXPORT_SYMBOL(cpufreq_update_policy);
 
+static void setup_cpu0_symlink(struct device *dev, bool is_remove)
+{
+	static unsigned int root_cpu = 0; // <-XXX
+
+	/* remove cpu0 symlink */
+	if (is_remove) {
+		if (dev->id == 0) {
+			sysfs_remove_link(&dev->kobj, "cpufreq");
+			root_cpu = 0;
+			pr_debug("%s()#%d: remove cpu0 symlink\n", __func__, __LINE__);
+		}
+	/* create or modify cpu0 symlink */
+	} else {
+		if (dev->id == root_cpu) {
+			struct device *cpu0_dev;
+			struct cpufreq_policy *policy;
+			unsigned int next_root_cpu;
+			int ret = -1;
+
+			cpu0_dev = get_cpu_device(0);
+
+			for_each_online_cpu(next_root_cpu) {
+				if (next_root_cpu == root_cpu)
+					continue;
+				else
+					break;
+			}
+
+			policy = cpufreq_cpu_get(next_root_cpu);
+
+			if (policy) {
+				if (root_cpu != 0)
+					sysfs_remove_link(&cpu0_dev->kobj, "cpufreq");
+				ret = sysfs_create_link(&cpu0_dev->kobj, &policy->kobj, "cpufreq");
+				if (!ret) {
+					pr_debug("%s()#%d: create/modify cpu0 symlink (from root_cpu = %d to next_root_cpu = %d)\n", __func__, __LINE__, root_cpu, next_root_cpu);
+					root_cpu = next_root_cpu;
+				}
+				cpufreq_cpu_put(policy);
+			}
+		}
+	}
+}
+
 static int __cpuinit cpufreq_cpu_callback(struct notifier_block *nfb,
 					unsigned long action, void *hcpu)
 {
@@ -1863,14 +1955,20 @@ static int __cpuinit cpufreq_cpu_callback(struct notifier_block *nfb,
 		switch (action) {
 		case CPU_ONLINE:
 		case CPU_ONLINE_FROZEN:
+			setup_cpu0_symlink(dev, true); /* remove cpu0 symlink */
 			cpufreq_add_dev(dev, NULL);
 			break;
 		case CPU_DOWN_PREPARE:
 		case CPU_DOWN_PREPARE_FROZEN:
+			if (dev->id != 0) {
+				setup_cpu0_symlink(dev, false); /* modify cpu0 symlink */
+			}
 			__cpufreq_remove_dev(dev, NULL);
+			setup_cpu0_symlink(dev, false); /* create cpu0 symlink */
 			break;
 		case CPU_DOWN_FAILED:
 		case CPU_DOWN_FAILED_FROZEN:
+			setup_cpu0_symlink(dev, true); /* remove cpu0 symlink */
 			cpufreq_add_dev(dev, NULL);
 			break;
 		}

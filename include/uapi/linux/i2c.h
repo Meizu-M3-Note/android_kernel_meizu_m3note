@@ -76,8 +76,10 @@ struct i2c_msg {
 #define I2C_M_IGNORE_NAK	0x1000	/* if I2C_FUNC_PROTOCOL_MANGLING */
 #define I2C_M_NO_RD_ACK		0x0800	/* if I2C_FUNC_PROTOCOL_MANGLING */
 #define I2C_M_RECV_LEN		0x0400	/* length will be first received byte */
-	__u16 len;		/* msg length				*/
+	__u32 len;		/* msg length				*/
 	__u8 *buf;		/* pointer to msg data			*/
+	__u32 timing;			/* paramters of timings		*/
+	__u32 ext_flag;
 };
 
 /* To determine what functionality is present */

@@ -2,6 +2,12 @@
 #define __LINUX_PAGEISOLATION_H
 
 #ifdef CONFIG_MEMORY_ISOLATION
+#if defined(CONFIG_CMA) && defined(CONFIG_MTK_SVP) /* commit ad53f92eb416d81e469fa8ea57153e59455e7175 */
+static inline bool has_isolate_pageblock(struct zone *zone)
+{
+	return zone->nr_isolate_pageblock;
+}
+#endif
 static inline bool is_migrate_isolate_page(struct page *page)
 {
 	return get_pageblock_migratetype(page) == MIGRATE_ISOLATE;
@@ -11,6 +17,12 @@ static inline bool is_migrate_isolate(int migratetype)
 	return migratetype == MIGRATE_ISOLATE;
 }
 #else
+#if defined(CONFIG_CMA) && defined(CONFIG_MTK_SVP) /* commit ad53f92eb416d81e469fa8ea57153e59455e7175 */
+static inline bool has_isolate_pageblock(struct zone *zone)
+{
+	return false;
+}
+#endif
 static inline bool is_migrate_isolate_page(struct page *page)
 {
 	return false;
@@ -64,5 +76,8 @@ int set_migratetype_isolate(struct page *page, bool skip_hwpoisoned_pages);
 void unset_migratetype_isolate(struct page *page, unsigned migratetype);
 struct page *alloc_migrate_target(struct page *page, unsigned long private,
 				int **resultp);
-
+#if defined(CONFIG_CMA) && defined(CONFIG_MTK_SVP)
+struct page *alloc_migrate_target_notmovable(struct page *page,
+				unsigned long private, int **resultp);
+#endif
 #endif

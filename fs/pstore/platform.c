@@ -36,6 +36,20 @@
 
 #include "internal.h"
 
+#ifdef __aarch64__
+static void *_memcpy(void *dest, const void *src, size_t count)
+{
+	char *tmp = dest;
+	const char *s = src;
+
+	while (count--)
+		*tmp++ = *s++;
+	return dest;
+}
+
+#define memcpy _memcpy
+#endif
+
 /*
  * We defer making "oops" entries appear in pstore - see
  * whether the system is actually still running well enough
@@ -66,7 +80,7 @@ struct pstore_info *psinfo;
 static char *backend;
 
 /* How much of the console log to snapshot */
-static unsigned long kmsg_bytes = 10240;
+static unsigned long kmsg_bytes = (1 << CONFIG_LOG_BUF_SHIFT);
 
 void pstore_set_kmsg_bytes(int bytes)
 {
@@ -162,6 +176,8 @@ static void pstore_dump(struct kmsg_dumper *dumper,
 				    oopscount, hsize + len, psinfo);
 		if (ret == 0 && reason == KMSG_DUMP_OOPS && pstore_is_mounted())
 			pstore_new_entry = 1;
+		if (ret)
+			break;
 
 		total += hsize + len;
 		part++;
@@ -203,9 +219,22 @@ static void pstore_console_write(struct console *con, const char *s, unsigned c)
 	}
 }
 
+static void pstore_simp_console_write(struct console *con, const char *s, unsigned c)
+{
+	u64 id;
+	psinfo->write_buf(PSTORE_TYPE_CONSOLE, 0, &id, 0, s, c, psinfo);
+}
+
+void pstore_bconsole_write(struct console *con, const char *s, unsigned c)
+{
+	u64 id;
+	if (psinfo)
+		psinfo->write_buf(PSTORE_TYPE_CONSOLE, 1, &id, 0, s, c, psinfo);
+}
+
 static struct console pstore_console = {
 	.name	= "pstore",
-	.write	= pstore_console_write,
+	.write	= pstore_simp_console_write,
 	.flags	= CON_PRINTBUFFER | CON_ENABLED | CON_ANYTIME,
 	.index	= -1,
 };
@@ -267,6 +296,7 @@ int pstore_register(struct pstore_info *psi)
 	kmsg_dump_register(&pstore_dumper);
 	pstore_register_console();
 	pstore_register_ftrace();
+	pstore_register_pmsg();
 
 	if (pstore_update_ms >= 0) {
 		pstore_timer.expires = jiffies +

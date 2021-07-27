@@ -54,6 +54,8 @@
 #include <net/rtnetlink.h>
 #include <net/net_namespace.h>
 
+#include <linux/xlog.h>
+
 struct rtnl_link {
 	rtnl_doit_func		doit;
 	rtnl_dumpit_func	dumpit;
@@ -64,13 +66,22 @@ static DEFINE_MUTEX(rtnl_mutex);
 
 void rtnl_lock(void)
 {
+	#ifdef CONFIG_MTK_NET_LOGGING  
+	pr_debug(KERN_DEBUG "[mtk_net][rtnl_lock]rtnl_lock++\n");
+	#endif
 	mutex_lock(&rtnl_mutex);
+	#ifdef CONFIG_MTK_NET_LOGGING  
+	pr_debug(KERN_DEBUG "[mtk_net][rtnl_lock]rtnl_lock--\n");
+	#endif
 }
 EXPORT_SYMBOL(rtnl_lock);
 
 void __rtnl_unlock(void)
 {
 	mutex_unlock(&rtnl_mutex);
+	#ifdef CONFIG_MTK_NET_LOGGING  
+	pr_debug(KERN_DEBUG "[mtk_net][rtnl_lock]rtnl_unlock done\n");
+	#endif
 }
 
 void rtnl_unlock(void)
@@ -1981,7 +1992,10 @@ void rtmsg_ifinfo(int type, struct net_device *dev, unsigned int change)
 	struct sk_buff *skb;
 	int err = -ENOBUFS;
 	size_t if_info_size;
-
+	#ifdef CONFIG_MTK_NET_LOGGING  
+    pr_debug(KERN_INFO "[mtk_net][rtnetlink]rtmsg_ifinfo type:%d, dev:%s, change:%u, pid = %d", 
+		type, dev->name, change, current->pid);
+    #endif
 	skb = nlmsg_new((if_info_size = if_nlmsg_size(dev, 0)), GFP_KERNEL);
 	if (skb == NULL)
 		goto errout;
@@ -2075,7 +2089,7 @@ int ndo_dflt_fdb_add(struct ndmsg *ndm,
 	 * implement its own handler for this.
 	 */
 	if (ndm->ndm_state && !(ndm->ndm_state & NUD_PERMANENT)) {
-		pr_info("%s: FDB only supports static addresses\n", dev->name);
+		pr_debug("%s: FDB only supports static addresses\n", dev->name);
 		return err;
 	}
 
@@ -2107,24 +2121,24 @@ static int rtnl_fdb_add(struct sk_buff *skb, struct nlmsghdr *nlh)
 
 	ndm = nlmsg_data(nlh);
 	if (ndm->ndm_ifindex == 0) {
-		pr_info("PF_BRIDGE: RTM_NEWNEIGH with invalid ifindex\n");
+		pr_debug("PF_BRIDGE: RTM_NEWNEIGH with invalid ifindex\n");
 		return -EINVAL;
 	}
 
 	dev = __dev_get_by_index(net, ndm->ndm_ifindex);
 	if (dev == NULL) {
-		pr_info("PF_BRIDGE: RTM_NEWNEIGH with unknown ifindex\n");
+		pr_debug("PF_BRIDGE: RTM_NEWNEIGH with unknown ifindex\n");
 		return -ENODEV;
 	}
 
 	if (!tb[NDA_LLADDR] || nla_len(tb[NDA_LLADDR]) != ETH_ALEN) {
-		pr_info("PF_BRIDGE: RTM_NEWNEIGH with invalid address\n");
+		pr_debug("PF_BRIDGE: RTM_NEWNEIGH with invalid address\n");
 		return -EINVAL;
 	}
 
 	addr = nla_data(tb[NDA_LLADDR]);
 	if (is_zero_ether_addr(addr)) {
-		pr_info("PF_BRIDGE: RTM_NEWNEIGH with invalid ether address\n");
+		pr_debug("PF_BRIDGE: RTM_NEWNEIGH with invalid ether address\n");
 		return -EINVAL;
 	}
 
@@ -2175,7 +2189,7 @@ int ndo_dflt_fdb_del(struct ndmsg *ndm,
 	 * implement its own handler for this.
 	 */
 	if (!(ndm->ndm_state & NUD_PERMANENT)) {
-		pr_info("%s: FDB only supports static addresses\n", dev->name);
+		pr_debug("%s: FDB only supports static addresses\n", dev->name);
 		return -EINVAL;
 	}
 
@@ -2208,24 +2222,24 @@ static int rtnl_fdb_del(struct sk_buff *skb, struct nlmsghdr *nlh)
 
 	ndm = nlmsg_data(nlh);
 	if (ndm->ndm_ifindex == 0) {
-		pr_info("PF_BRIDGE: RTM_DELNEIGH with invalid ifindex\n");
+		pr_debug("PF_BRIDGE: RTM_DELNEIGH with invalid ifindex\n");
 		return -EINVAL;
 	}
 
 	dev = __dev_get_by_index(net, ndm->ndm_ifindex);
 	if (dev == NULL) {
-		pr_info("PF_BRIDGE: RTM_DELNEIGH with unknown ifindex\n");
+		pr_debug("PF_BRIDGE: RTM_DELNEIGH with unknown ifindex\n");
 		return -ENODEV;
 	}
 
 	if (!tb[NDA_LLADDR] || nla_len(tb[NDA_LLADDR]) != ETH_ALEN) {
-		pr_info("PF_BRIDGE: RTM_DELNEIGH with invalid address\n");
+		pr_debug("PF_BRIDGE: RTM_DELNEIGH with invalid address\n");
 		return -EINVAL;
 	}
 
 	addr = nla_data(tb[NDA_LLADDR]);
 	if (is_zero_ether_addr(addr)) {
-		pr_info("PF_BRIDGE: RTM_DELNEIGH with invalid ether address\n");
+		pr_debug("PF_BRIDGE: RTM_DELNEIGH with invalid ether address\n");
 		return -EINVAL;
 	}
 
@@ -2513,7 +2527,7 @@ static int rtnl_bridge_setlink(struct sk_buff *skb, struct nlmsghdr *nlh)
 
 	dev = __dev_get_by_index(net, ifm->ifi_index);
 	if (!dev) {
-		pr_info("PF_BRIDGE: RTM_SETLINK with unknown ifindex\n");
+		pr_debug("PF_BRIDGE: RTM_SETLINK with unknown ifindex\n");
 		return -ENODEV;
 	}
 
@@ -2583,7 +2597,7 @@ static int rtnl_bridge_dellink(struct sk_buff *skb, struct nlmsghdr *nlh)
 
 	dev = __dev_get_by_index(net, ifm->ifi_index);
 	if (!dev) {
-		pr_info("PF_BRIDGE: RTM_SETLINK with unknown ifindex\n");
+		pr_debug("PF_BRIDGE: RTM_SETLINK with unknown ifindex\n");
 		return -ENODEV;
 	}
 

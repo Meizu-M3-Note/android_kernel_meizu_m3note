@@ -149,7 +149,11 @@ static void reset_node_lowmem_managed_pages(pg_data_t *pgdat)
 	 * zone also includes highmem movable zone.
 	 */
 	for (z = pgdat->node_zones; z < pgdat->node_zones + MAX_NR_ZONES; z++)
+#if !defined(CONFIG_CMA) || !defined(CONFIG_MTK_SVP) /* for NR_FREE_PAGES not correct at zone cma */
 		if (!is_highmem(z))
+#else
+		if (!is_highmem(z) && !is_zone_cma(z))
+#endif
 			z->managed_pages = 0;
 }
 

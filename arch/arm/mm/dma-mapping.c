@@ -358,7 +358,11 @@ static int __init atomic_pool_init(void)
 	if (!pages)
 		goto no_pages;
 
+#if defined(CONFIG_CMA) && defined(CONFIG_MTK_SVP)
+	if (IS_ENABLED(CONFIG_DMA_CMA))
+#else
 	if (IS_ENABLED(CONFIG_CMA))
+#endif
 		ptr = __alloc_from_contiguous(NULL, pool->size, prot, &page,
 					      atomic_pool_init);
 	else
@@ -679,7 +683,11 @@ static void *__dma_alloc(struct device *dev, size_t size, dma_addr_t *handle,
 		addr = __alloc_simple_buffer(dev, size, gfp, &page);
 	else if (!(gfp & __GFP_WAIT))
 		addr = __alloc_from_pool(size, &page);
+#if defined(CONFIG_CMA) && defined(CONFIG_MTK_SVP)
+	else if (!IS_ENABLED(CONFIG_DMA_CMA))
+#else
 	else if (!IS_ENABLED(CONFIG_CMA))
+#endif
 		addr = __alloc_remap_buffer(dev, size, gfp, prot, &page, caller);
 	else
 		addr = __alloc_from_contiguous(dev, size, prot, &page, caller);
@@ -768,7 +776,11 @@ static void __arm_dma_free(struct device *dev, size_t size, void *cpu_addr,
 		__dma_free_buffer(page, size);
 	} else if (__free_from_pool(cpu_addr, size)) {
 		return;
+#if defined(CONFIG_CMA) && defined(CONFIG_MTK_SVP)
+	} else if (!IS_ENABLED(CONFIG_DMA_CMA)) {
+#else
 	} else if (!IS_ENABLED(CONFIG_CMA)) {
+#endif
 		__dma_free_remap(cpu_addr, size);
 		__dma_free_buffer(page, size);
 	} else {

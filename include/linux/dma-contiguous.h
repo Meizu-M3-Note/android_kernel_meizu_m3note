@@ -67,20 +67,98 @@ struct device;
 
 extern struct cma *dma_contiguous_default_area;
 
+#if !defined(CONFIG_CMA) || !defined(CONFIG_MTK_SVP)
 void dma_contiguous_reserve(phys_addr_t addr_limit);
+#else
+#ifdef CONFIG_DMA_CMA
+void dma_contiguous_reserve(phys_addr_t addr_limit);
+#else
+static inline void dma_contiguous_reserve(phys_addr_t limit) { }
+#endif
+#endif
+
+#if !defined(CONFIG_CMA) || !defined(CONFIG_MTK_SVP)
 int dma_declare_contiguous(struct device *dev, phys_addr_t size,
 			   phys_addr_t base, phys_addr_t limit);
+#else
+
+static inline struct cma *dev_get_cma_area(struct device *dev)
+{
+	if (dev && dev->cma_area)
+		return dev->cma_area;
+	return dma_contiguous_default_area;
+}
+
+static inline void dev_set_cma_area(struct device *dev, struct cma *cma)
+{
+	if (dev)
+		dev->cma_area = cma;
+}
+
+static inline void dma_contiguous_set_default(struct cma *cma)
+{
+	dma_contiguous_default_area = cma;
+}
+
+int __init dma_contiguous_reserve_area(phys_addr_t size, phys_addr_t base,
+				       phys_addr_t limit, struct cma **res_cma);
+
+/**
+ * dma_declare_contiguous() - reserve area for contiguous memory handling
+ *			      for particular device
+ * @dev:   Pointer to device structure.
+ * @size:  Size of the reserved memory.
+ * @base:  Start address of the reserved memory (optional, 0 for any).
+ * @limit: End address of the reserved memory (optional, 0 for any).
+ *
+ * This function reserves memory for specified device. It should be
+ * called by board specific code when early allocator (memblock or bootmem)
+ * is still activate.
+ */
+static inline int dma_declare_contiguous(struct device *dev, phys_addr_t size,
+					 phys_addr_t base, phys_addr_t limit)
+{
+	struct cma *cma;
+	int ret;
+	ret = dma_contiguous_reserve_area(size, base, limit, &cma);
+	if (ret == 0)
+		dev_set_cma_area(dev, cma);
+
+	return ret;
+}
+#endif
 
 struct page *dma_alloc_from_contiguous(struct device *dev, int count,
 				       unsigned int order);
 bool dma_release_from_contiguous(struct device *dev, struct page *pages,
 				 int count);
 
+#if defined(CONFIG_CMA) && defined(CONFIG_MTK_SVP) /* SVP 09 */
+extern unsigned long cma_total_pages(unsigned long node_start_pfn,
+				unsigned long node_end_pfn);
+#endif
+
 #else
 
 #define MAX_CMA_AREAS	(0)
 
 static inline void dma_contiguous_reserve(phys_addr_t limit) { }
+
+#if defined(CONFIG_CMA) && defined(CONFIG_MTK_SVP)
+static inline struct cma *dev_get_cma_area(struct device *dev)
+{
+	return NULL;
+}
+
+static inline void dev_set_cma_area(struct device *dev, struct cma *cma) { }
+
+static inline void dma_contiguous_set_default(struct cma *cma) { }
+
+static inline int dma_contiguous_reserve_area(phys_addr_t size, phys_addr_t base,
+				       phys_addr_t limit, struct cma **res_cma) {
+	return -ENOSYS;
+}
+#endif
 
 static inline
 int dma_declare_contiguous(struct device *dev, phys_addr_t size,
@@ -103,8 +181,18 @@ bool dma_release_from_contiguous(struct device *dev, struct page *pages,
 	return false;
 }
 
+#if defined(CONFIG_CMA) && defined(CONFIG_MTK_SVP) /* SVP 09 */
+static inline unsigned long cma_total_pages(unsigned long node_start_pfn,
+				unsigned long node_end_pfn) { return 0; }
 #endif
 
 #endif
+
+#endif
+
+#define SVP_REGION_IOC_MAGIC		'S'
+
+#define SVP_REGION_IOC_ONLINE		_IOR(SVP_REGION_IOC_MAGIC, 2, int)
+#define SVP_REGION_IOC_OFFLINE		_IOR(SVP_REGION_IOC_MAGIC, 4, int)
 
 #endif

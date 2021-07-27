@@ -20,6 +20,8 @@
 #include <linux/device.h>
 #include <linux/init.h>
 #include <linux/sched.h>
+#define MET_USER_EVENT_SUPPORT
+#include <linux/met_drv.h>
 
 static DEFINE_SPINLOCK(enable_lock);
 static DEFINE_MUTEX(prepare_lock);
@@ -33,6 +35,10 @@ static int enable_refcnt;
 static HLIST_HEAD(clk_root_list);
 static HLIST_HEAD(clk_orphan_list);
 static LIST_HEAD(clk_notifier_list);
+
+#if !defined(CONFIG_MTK_CLKMGR) /* FIXME: only for bring up */
+#define MT_CCF_DEBUG	0
+#endif /* !defined(CONFIG_MTK_CLKMGR) */
 
 /***           locking             ***/
 static void clk_prepare_lock(void)
@@ -433,6 +439,46 @@ static inline void clk_debug_reparent(struct clk *clk, struct clk *new_parent)
 {
 }
 #endif
+/* MET */
+static void chk_clk_tree_show_one(struct clk *c, int level)
+{
+	if (!c)
+		return;
+
+	if (c->enable_count)
+		met_show_clk_tree(c->name, 0, 1);
+	else
+		met_show_clk_tree(c->name, 0, 0);
+}
+static void chk_clk_tree_show_subtree(struct clk *c, int level)
+{
+	struct clk *child;
+
+	if (!c)
+		return;
+
+	chk_clk_tree_show_one(c, level);
+
+	hlist_for_each_entry(child, &c->children, child_node)
+		chk_clk_tree_show_subtree(child, level + 1);
+}
+int chk_clk_tree(void)
+{
+	struct clk *c;
+
+	clk_prepare_lock();
+
+	hlist_for_each_entry(c, &clk_root_list, child_node)
+		chk_clk_tree_show_subtree(c, 0);
+
+	hlist_for_each_entry(c, &clk_orphan_list, child_node)
+		chk_clk_tree_show_subtree(c, 0);
+
+	clk_prepare_unlock();
+
+	return 0;
+}
+EXPORT_SYMBOL_GPL(chk_clk_tree);
 
 /* caller must hold prepare_lock */
 static void clk_unprepare_unused_subtree(struct clk *clk)
@@ -686,6 +732,12 @@ void __clk_unprepare(struct clk *clk)
 	if (!clk)
 		return;
 
+#if MT_CCF_DEBUG && !defined(CONFIG_MTK_CLKMGR) /* FIXME: only for bring up */
+	if (!strcmp(__clk_get_name(clk), "mm_disp0_smi_common"))
+		pr_debug("[CCF] %s: %s, prepare/enable_count=%u/%u\n", __func__,
+			__clk_get_name(clk), clk->prepare_count,
+			clk->enable_count);
+#endif /* !defined(CONFIG_MTK_CLKMGR) */
 	if (WARN_ON(clk->prepare_count == 0))
 		return;
 
@@ -726,6 +778,12 @@ int __clk_prepare(struct clk *clk)
 	if (!clk)
 		return 0;
 
+#if MT_CCF_DEBUG && !defined(CONFIG_MTK_CLKMGR) /* FIXME: only for bring up */
+	if (!strcmp(__clk_get_name(clk), "mm_disp0_smi_common"))
+		pr_debug("[CCF] %s: %s, prepare/enable_count=%u/%u\n", __func__,
+				__clk_get_name(clk), clk->prepare_count,
+				clk->enable_count);
+#endif /* !defined(CONFIG_MTK_CLKMGR) */
 	if (clk->prepare_count == 0) {
 		ret = __clk_prepare(clk->parent);
 		if (ret)
@@ -777,6 +835,12 @@ static void __clk_disable(struct clk *clk)
 	if (WARN_ON(IS_ERR(clk)))
 		return;
 
+#if MT_CCF_DEBUG && !defined(CONFIG_MTK_CLKMGR) /* FIXME: only for bring up */
+	if (!strcmp(__clk_get_name(clk), "mm_disp0_smi_common"))
+		pr_debug("[CCF] %s: %s, prepare/enable_count=%u/%u\n", __func__,
+			__clk_get_name(clk), clk->prepare_count,
+			clk->enable_count);
+#endif /* !defined(CONFIG_MTK_CLKMGR) */
 	if (WARN_ON(clk->enable_count == 0))
 		return;
 
@@ -787,6 +851,15 @@ static void __clk_disable(struct clk *clk)
 		clk->ops->disable(clk->hw);
 
 	__clk_disable(clk->parent);
+
+	/* MET */
+	if (clk->name != NULL) {
+		met_show_clk_tree(clk->name, 0, 0);
+
+		if (met_ccf_clk_disable) {
+			met_ccf_clk_disable(clk);
+		}
+	}
 }
 
 /**
@@ -818,6 +891,12 @@ static int __clk_enable(struct clk *clk)
 	if (!clk)
 		return 0;
 
+#if MT_CCF_DEBUG && !defined(CONFIG_MTK_CLKMGR) /* FIXME: only for bring up */
+	if (!strcmp(__clk_get_name(clk), "mm_disp0_smi_common"))
+		pr_debug("[CCF] %s: %s, prepare/enable_count=%u/%u\n", __func__,
+			__clk_get_name(clk), clk->prepare_count,
+			clk->enable_count);
+#endif /* !defined(CONFIG_MTK_CLKMGR) */
 	if (WARN_ON(clk->prepare_count == 0))
 		return -ESHUTDOWN;
 
@@ -837,6 +916,16 @@ static int __clk_enable(struct clk *clk)
 	}
 
 	clk->enable_count++;
+
+	/* MET */
+	if (clk->name != NULL) {
+		met_show_clk_tree(clk->name, 0, 1);
+
+		if (met_ccf_clk_enable) {
+			met_ccf_clk_enable(clk);
+		}
+	}
+
 	return 0;
 }
 
@@ -1244,6 +1333,10 @@ int clk_set_rate(struct clk *clk, unsigned long rate)
 	/* change the rates */
 	clk_change_rate(top);
 
+	if (met_ccf_clk_set_rate) {
+		met_ccf_clk_set_rate(clk, top);
+	}
+
 out:
 	clk_prepare_unlock();
 
@@ -1503,6 +1596,10 @@ int clk_set_parent(struct clk *clk, struct clk *parent)
 
 	/* do the re-parent */
 	ret = __clk_set_parent(clk, parent, p_index);
+
+	if (met_ccf_clk_set_parent) {
+		met_ccf_clk_set_parent(clk, parent);
+	}
 
 	/* propagate rate recalculation accordingly */
 	if (ret)

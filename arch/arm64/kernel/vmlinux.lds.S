@@ -41,7 +41,6 @@ SECTIONS
 	}
 	.text : {			/* Real text segment		*/
 		_stext = .;		/* Text and read-only data	*/
-			*(.smp.pen.text)
 			__exception_text_start = .;
 			*(.exception.text)
 			__exception_text_end = .;
@@ -54,6 +53,11 @@ SECTIONS
 		. = ALIGN(16);
 		*(.got)			/* Global offset table		*/
 	}
+
+#ifdef CONFIG_MTK_AEE_MRDUMP
+	.mrdump ALIGN (0x400): {
+	}
+#endif
 
 	RO_DATA(PAGE_SIZE)
 

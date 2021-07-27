@@ -1325,12 +1325,35 @@ skip_routeinfo:
 		}
 	}
 
+#ifdef CONFIG_MTK_DHCPV6C_WIFI
+	if (in6_dev->if_flags & IF_RA_OTHERCONF){
+		pr_debug(KERN_INFO "[mtk_net][ipv6]receive RA with o bit!\n");
+		in6_dev->cnf.ra_info_flag = 1;
+	} 
+	if(in6_dev->if_flags & IF_RA_MANAGED){
+		pr_debug(KERN_INFO "[mtk_net][ipv6]receive RA with m bit!\n");
+		in6_dev->cnf.ra_info_flag = 2;
+	}
+	if(in6_dev->cnf.ra_info_flag == 0){
+		pr_debug(KERN_INFO "[mtk_net][ipv6]receive RA neither O nor M bit is set!\n");
+		in6_dev->cnf.ra_info_flag = 4;
+	}
+#endif
+
 	if (ndopts.nd_useropts) {
 		struct nd_opt_hdr *p;
 		for (p = ndopts.nd_useropts;
 		     p;
 		     p = ndisc_next_useropt(p, ndopts.nd_useropts_end)) {
 			ndisc_ra_useropt(skb, p);
+#ifdef CONFIG_MTK_DHCPV6C_WIFI
+			/* only clear ra_info_flag when O bit is set */
+			if (p->nd_opt_type == ND_OPT_RDNSS &&
+					in6_dev->if_flags & IF_RA_OTHERCONF) {
+				pr_debug(KERN_INFO "[mtk_net][ipv6]RDNSS, ignore RA with o bit!\n");
+				in6_dev->cnf.ra_info_flag = 0;
+			} 
+#endif
 		}
 	}
 
@@ -1542,7 +1565,7 @@ int ndisc_rcv(struct sk_buff *skb)
 	}
 
 	memset(NEIGH_CB(skb), 0, sizeof(struct neighbour_cb));
-
+	
 	switch (msg->icmph.icmp6_type) {
 	case NDISC_NEIGHBOUR_SOLICITATION:
 		ndisc_recv_ns(skb);
@@ -1611,7 +1634,7 @@ static void ndisc_warn_deprecated_sysctl(struct ctl_table *ctl,
 	static int warned;
 	if (strcmp(warncomm, current->comm) && warned < 5) {
 		strcpy(warncomm, current->comm);
-		pr_warn("process `%s' is using deprecated sysctl (%s) net.ipv6.neigh.%s.%s - use net.ipv6.neigh.%s.%s_ms instead\n",
+		pr_debug("process `%s' is using deprecated sysctl (%s) net.ipv6.neigh.%s.%s - use net.ipv6.neigh.%s.%s_ms instead\n",
 			warncomm, func,
 			dev_name, ctl->procname,
 			dev_name, ctl->procname);

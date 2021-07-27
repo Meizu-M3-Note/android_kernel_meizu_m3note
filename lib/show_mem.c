@@ -22,6 +22,7 @@ void show_mem(unsigned int filter)
 		return;
 
 	for_each_online_pgdat(pgdat) {
+#if !defined(CONFIG_CMA) || !defined(CONFIG_MTK_SVP) /* SVP 10 */
 		unsigned long i, flags;
 
 		pgdat_resize_lock(pgdat, &flags);
@@ -50,6 +51,25 @@ void show_mem(unsigned int filter)
 			total++;
 		}
 		pgdat_resize_unlock(pgdat, &flags);
+#else
+		unsigned long flags;
+		int zoneid;
+
+		pgdat_resize_lock(pgdat, &flags);
+		for (zoneid = 0; zoneid < MAX_NR_ZONES; zoneid++) {
+			struct zone *zone = &pgdat->node_zones[zoneid];
+			if (!populated_zone(zone))
+				continue;
+
+			total += zone->present_pages;
+			reserved += zone->present_pages - zone->managed_pages;
+
+			/* if (is_highmem_idx(zoneid)) */
+			if (is_highmem(zone))
+				highmem += zone->present_pages;
+		}
+		pgdat_resize_unlock(pgdat, &flags);
+#endif
 	}
 
 	printk("%lu pages RAM\n", total);

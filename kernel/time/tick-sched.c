@@ -20,6 +20,9 @@
 #include <linux/profile.h>
 #include <linux/sched.h>
 #include <linux/module.h>
+#ifdef CONFIG_MTK_SCHED_RQAVG_US
+#include <linux/rq_stats.h>
+#endif
 #include <linux/irq_work.h>
 #include <linux/posix-timers.h>
 #include <linux/perf_event.h>
@@ -29,6 +32,18 @@
 #include "tick-internal.h"
 
 #include <trace/events/timer.h>
+
+#ifdef CONFIG_MTK_SCHED_RQAVG_US
+struct rq_data rq_info;
+#ifdef CONFIG_MTK_SCHED_RQAVG_US_ENABLE_WQ
+struct workqueue_struct *rq_wq;
+#endif
+spinlock_t rq_lock;
+#endif
+
+#ifdef CONFIG_MT_LOAD_BALANCE_PROFILER
+#include <mtlbprof/mtlbprof.h>
+#endif
 
 /*
  * Per cpu nohz control structure
@@ -67,8 +82,7 @@ static void tick_do_update_jiffies64(ktime_t now)
 	if (delta.tv64 >= tick_period.tv64) {
 
 		delta = ktime_sub(delta, tick_period);
-		last_jiffies_update = ktime_add(last_jiffies_update,
-						tick_period);
+		last_jiffies_update = ktime_add(last_jiffies_update, tick_period);
 
 		/* Slow path for long timeouts */
 		if (unlikely(delta.tv64 >= tick_period.tv64)) {
@@ -76,8 +90,7 @@ static void tick_do_update_jiffies64(ktime_t now)
 
 			ticks = ktime_divns(delta, incr);
 
-			last_jiffies_update = ktime_add_ns(last_jiffies_update,
-							   incr * ticks);
+			last_jiffies_update = ktime_add_ns(last_jiffies_update, incr * ticks);
 		}
 		do_timer(++ticks);
 
@@ -209,8 +222,7 @@ static void nohz_full_kick_work_func(struct irq_work *work)
 }
 
 static DEFINE_PER_CPU(struct irq_work, nohz_full_kick_work) = {
-	.func = nohz_full_kick_work_func,
-};
+.func = nohz_full_kick_work_func,};
 
 /*
  * Kick the current CPU if it's full dynticks in order to force it to
@@ -237,8 +249,7 @@ void tick_nohz_full_kick_all(void)
 		return;
 
 	preempt_disable();
-	smp_call_function_many(nohz_full_mask,
-			       nohz_full_kick_ipi, NULL, false);
+	smp_call_function_many(nohz_full_mask, nohz_full_kick_ipi, NULL, false);
 	preempt_enable();
 }
 
@@ -278,24 +289,24 @@ static int __init tick_nohz_full_setup(char *str)
 
 	alloc_bootmem_cpumask_var(&nohz_full_mask);
 	if (cpulist_parse(str, nohz_full_mask) < 0) {
-		pr_warning("NOHZ: Incorrect nohz_full cpumask\n");
+		pr_warn("NOHZ: Incorrect nohz_full cpumask\n");
 		return 1;
 	}
 
 	cpu = smp_processor_id();
 	if (cpumask_test_cpu(cpu, nohz_full_mask)) {
-		pr_warning("NO_HZ: Clearing %d from nohz_full range for timekeeping\n", cpu);
+		pr_warn("NO_HZ: Clearing %d from nohz_full range for timekeeping\n", cpu);
 		cpumask_clear_cpu(cpu, nohz_full_mask);
 	}
 	have_nohz_full_mask = true;
 
 	return 1;
 }
+
 __setup("nohz_full=", tick_nohz_full_setup);
 
 static int __cpuinit tick_nohz_cpu_down_callback(struct notifier_block *nfb,
-						 unsigned long action,
-						 void *hcpu)
+						 unsigned long action, void *hcpu)
 {
 	unsigned int cpu = (unsigned long)hcpu;
 
@@ -317,7 +328,7 @@ static int __cpuinit tick_nohz_cpu_down_callback(struct notifier_block *nfb,
  * separations: 0,2,4,6,...
  * This is NR_CPUS + sizeof('\0')
  */
-static char __initdata nohz_full_buf[NR_CPUS + 1];
+static char nohz_full_buf[NR_CPUS + 1] __initdata;
 
 static int tick_nohz_init_all(void)
 {
@@ -350,7 +361,7 @@ void __init tick_nohz_init(void)
 	/* Make sure full dynticks CPU are also RCU nocbs */
 	for_each_cpu(cpu, nohz_full_mask) {
 		if (!rcu_is_nocb_cpu(cpu)) {
-			pr_warning("NO_HZ: CPU %d is not RCU nocb: "
+			pr_warn("NO_HZ: CPU %d is not RCU nocb: "
 				   "cleared from nohz_full range", cpu);
 			cpumask_clear_cpu(cpu, nohz_full_mask);
 		}
@@ -370,7 +381,7 @@ void __init tick_nohz_init(void)
 /*
  * NO HZ enabled ?
  */
-int tick_nohz_enabled __read_mostly  = 1;
+int tick_nohz_enabled __read_mostly = 1;
 
 /*
  * Enable / Disable tickless mode
@@ -435,12 +446,46 @@ update_ts_time_stats(int cpu, struct tick_sched *ts, ktime_t now, u64 *last_upda
 
 }
 
+static void
+update_ts_time_stats_wo_cpuoffline(int cpu, struct tick_sched *ts, ktime_t now,
+				   u64 *last_update_time)
+{
+	ktime_t delta;
+
+	if (ts->idle_active && (!ts->cpu_plug_off_flag)) {
+		delta = ktime_sub(now, ts->idle_entrytime_wo_cpuoffline);
+		if (nr_iowait_cpu(cpu) > 0)
+			ts->iowait_sleeptime_wo_cpuoffline =
+			    ktime_add(ts->iowait_sleeptime_wo_cpuoffline, delta);
+		else
+			ts->idle_sleeptime_wo_cpuoffline =
+			    ktime_add(ts->idle_sleeptime_wo_cpuoffline, delta);
+		ts->idle_entrytime_wo_cpuoffline = now;
+	}
+
+	if (last_update_time)
+		*last_update_time = ktime_to_us(now);
+
+}
+
+
+void tick_set_cpu_plugoff_flag(int flag)
+{
+	struct tick_sched *ts = &__get_cpu_var(tick_cpu_sched);
+
+	ts->cpu_plug_off_flag = flag;
+}
+
 static void tick_nohz_stop_idle(int cpu, ktime_t now)
 {
 	struct tick_sched *ts = &per_cpu(tick_cpu_sched, cpu);
 
 	update_ts_time_stats(cpu, ts, now, NULL);
+	update_ts_time_stats_wo_cpuoffline(cpu, ts, now, NULL);
 	ts->idle_active = 0;
+#ifdef CONFIG_MT_LOAD_BALANCE_PROFILER
+	mt_lbprof_update_state(cpu, MT_LBPROF_NO_TASK_STATE);
+#endif
 
 	sched_clock_idle_wakeup_event(0);
 }
@@ -450,7 +495,12 @@ static ktime_t tick_nohz_start_idle(int cpu, struct tick_sched *ts)
 	ktime_t now = ktime_get();
 
 	ts->idle_entrytime = now;
+	ts->idle_entrytime_wo_cpuoffline = now;
 	ts->idle_active = 1;
+#ifdef CONFIG_MT_LOAD_BALANCE_PROFILER
+	mt_lbprof_update_state(cpu, MT_LBPROF_NO_TASK_STATE);
+#endif
+
 	sched_clock_idle_sleep_event();
 	return now;
 }
@@ -496,6 +546,35 @@ u64 get_cpu_idle_time_us(int cpu, u64 *last_update_time)
 }
 EXPORT_SYMBOL_GPL(get_cpu_idle_time_us);
 
+u64 get_cpu_idle_time_us_wo_cpuoffline(int cpu, u64 *last_update_time)
+{
+	struct tick_sched *ts = &per_cpu(tick_cpu_sched, cpu);
+	ktime_t now, idle;
+
+	if (!tick_nohz_enabled)
+		return -1;
+
+	now = ktime_get();
+	if (last_update_time) {
+		update_ts_time_stats_wo_cpuoffline(cpu, ts, now, last_update_time);
+		idle = ts->idle_sleeptime_wo_cpuoffline;
+	} else {
+		if (ts->idle_active && !nr_iowait_cpu(cpu) && cpu_online(cpu)
+		    && (!ts->cpu_plug_off_flag)) {
+			ktime_t delta = ktime_sub(now, ts->idle_entrytime_wo_cpuoffline);
+
+			idle = ktime_add(ts->idle_sleeptime_wo_cpuoffline, delta);
+		} else {
+			idle = ts->idle_sleeptime_wo_cpuoffline;
+		}
+	}
+
+	return ktime_to_us(idle);
+
+}
+EXPORT_SYMBOL_GPL(get_cpu_idle_time_us_wo_cpuoffline);
+
+
 /**
  * get_cpu_iowait_time_us - get the total iowait time of a cpu
  * @cpu: CPU number to query
@@ -536,11 +615,38 @@ u64 get_cpu_iowait_time_us(int cpu, u64 *last_update_time)
 }
 EXPORT_SYMBOL_GPL(get_cpu_iowait_time_us);
 
-static ktime_t tick_nohz_stop_sched_tick(struct tick_sched *ts,
-					 ktime_t now, int cpu)
+u64 get_cpu_iowait_time_us_wo_cpuoffline(int cpu, u64 *last_update_time)
+{
+	struct tick_sched *ts = &per_cpu(tick_cpu_sched, cpu);
+	ktime_t now, iowait;
+
+	if (!tick_nohz_enabled)
+		return -1;
+
+	now = ktime_get();
+	if (last_update_time) {
+		update_ts_time_stats_wo_cpuoffline(cpu, ts, now, last_update_time);
+		iowait = ts->iowait_sleeptime_wo_cpuoffline;
+	} else {
+		if (ts->idle_active && nr_iowait_cpu(cpu) > 0 && cpu_online(cpu)
+		    && (!ts->cpu_plug_off_flag)) {
+			ktime_t delta = ktime_sub(now, ts->idle_entrytime_wo_cpuoffline);
+
+			iowait = ktime_add(ts->iowait_sleeptime_wo_cpuoffline, delta);
+		} else {
+			iowait = ts->iowait_sleeptime_wo_cpuoffline;
+		}
+	}
+
+	return ktime_to_us(iowait);
+}
+EXPORT_SYMBOL_GPL(get_cpu_iowait_time_us_wo_cpuoffline);
+
+
+static ktime_t tick_nohz_stop_sched_tick(struct tick_sched *ts, ktime_t now, int cpu)
 {
 	unsigned long seq, last_jiffies, next_jiffies, delta_jiffies;
-	ktime_t last_update, expires, ret = { .tv64 = 0 };
+	ktime_t last_update, expires, ret = {.tv64 = 0 };
 	unsigned long rcu_delta_jiffies;
 	struct clock_event_device *dev = __get_cpu_var(tick_cpu_device).evtdev;
 	u64 time_delta;
@@ -553,8 +659,7 @@ static ktime_t tick_nohz_stop_sched_tick(struct tick_sched *ts,
 		time_delta = timekeeping_max_deferment();
 	} while (read_seqretry(&jiffies_lock, seq));
 
-	if (rcu_needs_cpu(cpu, &rcu_delta_jiffies) ||
-	    arch_needs_cpu(cpu) || irq_work_needs_cpu()) {
+	if (rcu_needs_cpu(cpu, &rcu_delta_jiffies) || arch_needs_cpu(cpu) || irq_work_needs_cpu()) {
 		next_jiffies = last_jiffies + 1;
 		delta_jiffies = 1;
 	} else {
@@ -599,11 +704,9 @@ static ktime_t tick_nohz_stop_sched_tick(struct tick_sched *ts,
 		} else if (!ts->do_timer_last) {
 			time_delta = KTIME_MAX;
 		}
-
 #ifdef CONFIG_NO_HZ_FULL
 		if (!ts->inidle) {
-			time_delta = min(time_delta,
-					 scheduler_tick_max_deferment());
+			time_delta = min(time_delta, scheduler_tick_max_deferment());
 		}
 #endif
 
@@ -622,8 +725,7 @@ static ktime_t tick_nohz_stop_sched_tick(struct tick_sched *ts,
 			 * the time delta accordingly to ensure the
 			 * clocksource does not wrap.
 			 */
-			time_delta = min_t(u64, time_delta,
-					   tick_period.tv64 * delta_jiffies);
+			time_delta = min_t(u64, time_delta, tick_period.tv64 * delta_jiffies);
 		}
 
 		if (time_delta < KTIME_MAX)
@@ -657,20 +759,19 @@ static ktime_t tick_nohz_stop_sched_tick(struct tick_sched *ts,
 		 * If the expiration time == KTIME_MAX, then
 		 * in this case we simply stop the tick timer.
 		 */
-		 if (unlikely(expires.tv64 == KTIME_MAX)) {
+		if (unlikely(expires.tv64 == KTIME_MAX)) {
 			if (ts->nohz_mode == NOHZ_MODE_HIGHRES)
 				hrtimer_cancel(&ts->sched_timer);
 			goto out;
 		}
 
 		if (ts->nohz_mode == NOHZ_MODE_HIGHRES) {
-			hrtimer_start(&ts->sched_timer, expires,
-				      HRTIMER_MODE_ABS_PINNED);
+			hrtimer_start(&ts->sched_timer, expires, HRTIMER_MODE_ABS_PINNED);
 			/* Check, if the timer was already in the past */
 			if (hrtimer_active(&ts->sched_timer))
 				goto out;
 		} else if (!tick_program_event(expires, 0))
-				goto out;
+			goto out;
 		/*
 		 * We are past the event already. So we crossed a
 		 * jiffie boundary. Update jiffies and raise the
@@ -690,18 +791,18 @@ out:
 static void tick_nohz_full_stop_tick(struct tick_sched *ts)
 {
 #ifdef CONFIG_NO_HZ_FULL
-       int cpu = smp_processor_id();
+	int cpu = smp_processor_id();
 
-       if (!tick_nohz_full_cpu(cpu) || is_idle_task(current))
-               return;
+	if (!tick_nohz_full_cpu(cpu) || is_idle_task(current))
+		return;
 
-       if (!ts->tick_stopped && ts->nohz_mode == NOHZ_MODE_INACTIVE)
-	       return;
+	if (!ts->tick_stopped && ts->nohz_mode == NOHZ_MODE_INACTIVE)
+		return;
 
-       if (!can_stop_full_tick())
-               return;
+	if (!can_stop_full_tick())
+		return;
 
-       tick_nohz_stop_sched_tick(ts, ktime_get(), cpu);
+	tick_nohz_stop_sched_tick(ts, ktime_get(), cpu);
 #endif
 }
 
@@ -721,7 +822,8 @@ static bool can_stop_idle_tick(int cpu, struct tick_sched *ts)
 	}
 
 	if (unlikely(ts->nohz_mode == NOHZ_MODE_INACTIVE)) {
-		ts->sleep_length = (ktime_t) { .tv64 = NSEC_PER_SEC/HZ };
+		ts->sleep_length = (ktime_t) {
+		.tv64 = NSEC_PER_SEC / HZ};
 		return false;
 	}
 
@@ -731,10 +833,9 @@ static bool can_stop_idle_tick(int cpu, struct tick_sched *ts)
 	if (unlikely(local_softirq_pending() && cpu_online(cpu))) {
 		static int ratelimit;
 
-		if (ratelimit < 10 &&
-		    (local_softirq_pending() & SOFTIRQ_STOP_IDLE_MASK)) {
+		if (ratelimit < 10 && (local_softirq_pending() & SOFTIRQ_STOP_IDLE_MASK)) {
 			pr_warn("NOHZ: local_softirq_pending %02x\n",
-				(unsigned int) local_softirq_pending());
+				(unsigned int)local_softirq_pending());
 			ratelimit++;
 		}
 		return false;
@@ -800,11 +901,11 @@ void tick_nohz_idle_enter(void)
 	WARN_ON_ONCE(irqs_disabled());
 
 	/*
- 	 * Update the idle state in the scheduler domain hierarchy
- 	 * when tick_nohz_stop_sched_tick() is called from the idle loop.
- 	 * State will be updated to busy during the first busy tick after
- 	 * exiting idle.
- 	 */
+	 * Update the idle state in the scheduler domain hierarchy
+	 * when tick_nohz_stop_sched_tick() is called from the idle loop.
+	 * State will be updated to busy during the first busy tick after
+	 * exiting idle.
+	 */
 	set_cpu_sd_state_idle();
 
 	local_irq_disable();
@@ -817,6 +918,8 @@ void tick_nohz_idle_enter(void)
 	 */
 	ts->inidle = 1;
 	__tick_nohz_idle_enter(ts);
+
+	tick_set_cpu_plugoff_flag(0);
 
 	local_irq_enable();
 }
@@ -862,14 +965,12 @@ static void tick_nohz_restart(struct tick_sched *ts, ktime_t now)
 		hrtimer_forward(&ts->sched_timer, now, tick_period);
 
 		if (ts->nohz_mode == NOHZ_MODE_HIGHRES) {
-			hrtimer_start_expires(&ts->sched_timer,
-					      HRTIMER_MODE_ABS_PINNED);
+			hrtimer_start_expires(&ts->sched_timer, HRTIMER_MODE_ABS_PINNED);
 			/* Check, if the timer was already in the past */
 			if (hrtimer_active(&ts->sched_timer))
 				break;
 		} else {
-			if (!tick_program_event(
-				hrtimer_get_expires(&ts->sched_timer), 0))
+			if (!tick_program_event(hrtimer_get_expires(&ts->sched_timer), 0))
 				break;
 		}
 		/* Reread time and update jiffies */
@@ -889,7 +990,7 @@ static void tick_nohz_restart_sched_tick(struct tick_sched *ts, ktime_t now)
 	/*
 	 * Cancel the scheduled timer and restore the tick
 	 */
-	ts->tick_stopped  = 0;
+	ts->tick_stopped = 0;
 	ts->idle_exittime = now;
 
 	tick_nohz_restart(ts, now);
@@ -1035,7 +1136,7 @@ static void tick_nohz_kick_tick(int cpu, ktime_t now)
 	 * Do not touch the tick device, when the next expiry is either
 	 * already reached or less/equal than the tick period.
 	 */
-	delta =	ktime_sub(hrtimer_get_expires(&ts->sched_timer), now);
+	delta = ktime_sub(hrtimer_get_expires(&ts->sched_timer), now);
 	if (delta.tv64 <= tick_period.tv64)
 		return;
 
@@ -1061,10 +1162,15 @@ static inline void tick_check_nohz(int cpu)
 
 #else
 
-static inline void tick_nohz_switch_to_nohz(void) { }
-static inline void tick_check_nohz(int cpu) { }
+static inline void tick_nohz_switch_to_nohz(void)
+{
+}
 
-#endif /* CONFIG_NO_HZ_COMMON */
+static inline void tick_check_nohz(int cpu)
+{
+}
+
+#endif				/* CONFIG_NO_HZ_COMMON */
 
 /*
  * Called from irq_enter to notify about the possible interruption of idle()
@@ -1079,14 +1185,59 @@ void tick_check_idle(int cpu)
  * High resolution timer specific code
  */
 #ifdef CONFIG_HIGH_RES_TIMERS
+
+#ifdef CONFIG_MTK_SCHED_RQAVG_US
+static void update_rq_stats(void)
+{
+	unsigned long jiffy_gap = 0;
+	unsigned int rq_avg = 0;
+	unsigned long flags = 0;
+
+	spin_lock_irqsave(&rq_lock, flags);
+
+	jiffy_gap = jiffies - rq_info.rq_poll_last_jiffy;
+	if (jiffy_gap >= rq_info.rq_poll_jiffies) {
+		if (!rq_info.rq_avg)
+			rq_info.rq_poll_total_jiffies = 0;
+
+		rq_avg = nr_running() * 10;
+
+		if (rq_info.rq_poll_total_jiffies) {
+			rq_avg = (rq_avg * jiffy_gap) +
+			    (rq_info.rq_avg * rq_info.rq_poll_total_jiffies);
+			do_div(rq_avg, rq_info.rq_poll_total_jiffies + jiffy_gap);
+		}
+
+		rq_info.rq_avg = rq_avg;
+		rq_info.rq_poll_total_jiffies += jiffy_gap;
+		rq_info.rq_poll_last_jiffy = jiffies;
+	}
+
+	spin_unlock_irqrestore(&rq_lock, flags);
+}
+
+#ifdef CONFIG_MTK_SCHED_RQAVG_US_ENABLE_WQ
+static void wakeup_user(void)
+{
+	unsigned long jiffy_gap;
+
+	jiffy_gap = jiffies - rq_info.def_timer_last_jiffy;
+
+	if (jiffy_gap >= rq_info.def_timer_jiffies) {
+		rq_info.def_timer_last_jiffy = jiffies;
+		queue_work(rq_wq, &rq_info.def_timer_work);
+	}
+}
+#endif				/* CONFIG_MTK_SCHED_RQAVG_US_ENABLE_WQ */
+
+#endif				/* CONFIG_MTK_SCHED_RQAVG_US */
 /*
  * We rearm the timer until we get disabled by the idle code.
  * Called with interrupts disabled.
  */
 static enum hrtimer_restart tick_sched_timer(struct hrtimer *timer)
 {
-	struct tick_sched *ts =
-		container_of(timer, struct tick_sched, sched_timer);
+	struct tick_sched *ts = container_of(timer, struct tick_sched, sched_timer);
 	struct pt_regs *regs = get_irq_regs();
 	ktime_t now = ktime_get();
 
@@ -1098,6 +1249,23 @@ static enum hrtimer_restart tick_sched_timer(struct hrtimer *timer)
 	 */
 	if (regs)
 		tick_sched_handle(ts, regs);
+
+#ifdef CONFIG_MTK_SCHED_RQAVG_US
+	if ((rq_info.init == 1) && (tick_do_timer_cpu == smp_processor_id())) {
+
+		/*
+		 * update run queue statistics
+		 */
+		update_rq_stats();
+
+#ifdef CONFIG_MTK_SCHED_RQAVG_US_ENABLE_WQ
+		/*
+		 * wakeup user if needed
+		 */
+		wakeup_user();
+#endif				/* CONFIG_MTK_SCHED_RQAVG_US_ENABLE_WQ */
+	}
+#endif				/* CONFIG_MTK_SCHED_RQAVG_US */
 
 	hrtimer_forward(timer, now, tick_period);
 
@@ -1112,6 +1280,7 @@ static int __init skew_tick(char *str)
 
 	return 0;
 }
+
 early_param("skew_tick", skew_tick);
 
 /**
@@ -1134,6 +1303,7 @@ void tick_setup_sched_timer(void)
 	/* Offset the tick to avert jiffies_lock contention. */
 	if (sched_skew_tick) {
 		u64 offset = ktime_to_ns(tick_period) >> 1;
+
 		do_div(offset, num_possible_cpus());
 		offset *= smp_processor_id();
 		hrtimer_add_expires_ns(&ts->sched_timer, offset);
@@ -1141,8 +1311,7 @@ void tick_setup_sched_timer(void)
 
 	for (;;) {
 		hrtimer_forward(&ts->sched_timer, now, tick_period);
-		hrtimer_start_expires(&ts->sched_timer,
-				      HRTIMER_MODE_ABS_PINNED);
+		hrtimer_start_expires(&ts->sched_timer, HRTIMER_MODE_ABS_PINNED);
 		/* Check, if the timer was already in the past */
 		if (hrtimer_active(&ts->sched_timer))
 			break;
@@ -1154,19 +1323,21 @@ void tick_setup_sched_timer(void)
 		ts->nohz_mode = NOHZ_MODE_HIGHRES;
 #endif
 }
-#endif /* HIGH_RES_TIMERS */
+#endif				/* HIGH_RES_TIMERS */
 
 #if defined CONFIG_NO_HZ_COMMON || defined CONFIG_HIGH_RES_TIMERS
 void tick_cancel_sched_timer(int cpu)
 {
 	struct tick_sched *ts = &per_cpu(tick_cpu_sched, cpu);
 
-# ifdef CONFIG_HIGH_RES_TIMERS
+#ifdef CONFIG_HIGH_RES_TIMERS
 	if (ts->sched_timer.base)
 		hrtimer_cancel(&ts->sched_timer);
-# endif
+#endif
 
-	memset(ts, 0, sizeof(*ts));
+	/*to avoid idle time clear to 0 after CPU plug off*/
+	/* memset(ts, 0, sizeof(*ts)); */
+	ts->nohz_mode = NOHZ_MODE_INACTIVE;
 }
 #endif
 
@@ -1178,7 +1349,7 @@ void tick_clock_notify(void)
 	int cpu;
 
 	for_each_possible_cpu(cpu)
-		set_bit(0, &per_cpu(tick_cpu_sched, cpu).check_clocks);
+	    set_bit(0, &per_cpu(tick_cpu_sched, cpu).check_clocks);
 }
 
 /*

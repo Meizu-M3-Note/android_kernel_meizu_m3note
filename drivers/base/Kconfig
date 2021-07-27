@@ -187,6 +187,14 @@ config GENERIC_CPU_DEVICES
 	bool
 	default n
 
+config HAVE_CPU_AUTOPROBE
+	def_bool ARCH_HAS_CPU_AUTOPROBE
+
+config GENERIC_CPU_AUTOPROBE
+	bool
+	depends on !ARCH_HAS_CPU_AUTOPROBE
+	select HAVE_CPU_AUTOPROBE
+
 config SOC_BUS
 	bool
 
@@ -291,5 +299,22 @@ config CMA_AREAS
 	  If unsure, leave the default value "7".
 
 endif
+
+config MTK_SVP
+	bool "Use lower value (minimum)"
+	depends on CMA
+
+config MTK_SVP_RAM_DRAM_ADDR_LIMIT
+	hex "MTK SVP RAM address limitation"
+	depends on MTK_SVP
+
+config MTK_SVP_RAM_SIZE
+	int "MTK SVP RAM dram buffer size in MB"
+	depends on MTK_SVP
+
+config MTK_TUI_RAM_SIZE
+	int "MTK TUI SVP RAM dram buffer size in MB"
+	depends on MTK_SVP
+	default 0
 
 endmenu

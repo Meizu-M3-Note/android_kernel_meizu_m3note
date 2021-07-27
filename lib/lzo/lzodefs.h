@@ -19,7 +19,9 @@
 		put_unaligned(get_unaligned((const u64 *)(src)), (u64 *)(dst))
 #else
 #define COPY8(dst, src)	\
-		COPY4(dst, src); COPY4((dst) + 4, (src) + 4)
+	do {	\
+		COPY4(dst, src); COPY4((dst) + 4, (src) + 4);	\
+	} while (0)
 #endif
 
 #if defined(__BIG_ENDIAN) && defined(__LITTLE_ENDIAN)
