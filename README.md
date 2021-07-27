@@ -1,28 +1,44 @@
-[M681-intl](http://www.meizu.com)
-=================
+WHAT IS THIS?
+=============
 
-M681 repo is Linux kernel source code for Meizu M3 Note International smartphones. With this repo, you can customize the source code and compile a Linux kernel image yourself. Enjoy it!
+Linux Kernel source code for the devices:
+* Meizu M3 Note International
 
-HOW TO COMPILE
------------
 
-###1. Download source code###
+BUILD INSTRUCTIONS?
+===================
 
-  <code>git clone https://github.com/meizuosc/m681-intl.git</code>
+Specific sources are separated by releases with it's corresponding number. First, you should
+clone the project:
 
-###2. Compiling###
+        $ git clone https://github.com/jmpfbmx/android_kernel_meizu_m3note.git kernel
 
-```
-mkdir out
-make ARCH=arm64 CROSS_COMPILE=aarch64-linux-android- O=`pwd`/out m3note_intl_defconfig
-make -j8 ARCH=arm64 CROSS_COMPILE=aarch64-linux-android- O=`pwd`/out
-```
+At the same level of the "kernel" directory:
 
-  Note:
-  + Make sure you have arm cross tool chain, maybe you can download [here](http://www.linaro.org/downloads)
-  + If you get a poor cpu in your compiling host, you should use "-j4" or lower instead of "-j8"
+Download a prebuilt gcc:
 
-Get Help
---------
+        $ git clone -b lollipop-release https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9
 
-Checkout our community http://bbs.meizu.cn (in Chinese)
+Create KERNEL_OUT dir:
+
+        $ mkdir KERNEL_OUT
+
+Your directory tree should look like this:
+* kernel
+* aarch64-linux-android-4.9
+* KERNEL_OUT
+
+Finally, build the kernel according the next table of product names:
+
+| device                                   | product                 |
+| -----------------------------------------|-------------------------|
+| Meizu M3 Note International              | m3note                  |
+
+
+        $ make -C kernel O=../KERNEL_OUT ARCH=arm64 CROSS_COMPILE=../aarch64-linux-android-4.9 lineage_m3note_defconfig
+        $ make O=../KERNEL_OUT/ -C kernel ARCH=arm64 CROSS_COMPILE=../aarch64-linux-android-4.9/bin/aarch64-linux-android-
+
+You can specify "-j CORES" argument to speed-up your compilation, example:
+
+        $ make O=../KERNEL_OUT/ -C kernel ARCH=arm64 CROSS_COMPILE=../aarch64-linux-android-4.9/bin/aarch64-linux-android- -j64
+
